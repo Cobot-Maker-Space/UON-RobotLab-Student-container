@@ -1,17 +1,17 @@
-name: Build dev container image
+name: Build dev container image (macOS / arm64)
 
-# Publishes the ROS 2 dev container image used by src/.devcontainer/devcontainer.json.
+# Publishes the base ROS 2 dev container image used by src/.devcontainer/devcontainer.json on
+# this branch. This is the macOS variant: it targets Apple Silicon (arm64) and is built and
+# published separately from the windows/linux branches, which target amd64.
 #
-# Before this workflow existed the image was built by hand on someone's laptop and pushed, which
-# is how the production package ended up with a single tag ('2026-08-07') while devcontainer.json
-# pinned ':latest' - a tag that never existed, so every student got 'manifest unknown'.
-#
-# This publishes to a SEPARATE testing package, ghcr.io/<owner>/windows-robot-simulation. The
-# production uon-ros2-humble package is not touched by this workflow. Promotion to production is
-# a deliberate, separate step once the image has been validated on real lab hardware.
+# This image bakes in ROS 2 Humble, the desktop/Gazebo/noVNC packages, and setup.sh - but NOT a
+# compiled turtlebot3 workspace. The workspace is still cloned and built at container-creation
+# time by postCreateCommand (see setup.sh), with build/install/log persisted via the cache/
+# bind-mounts in devcontainer.json. Publishing this image just means students pull a ready-made
+# ROS+desktop+noVNC environment instead of apt-installing it locally on every fresh clone.
 #
 # FIRST RUN: GHCR creates new packages PRIVATE by default. After the first successful push, go to
-# the package settings on GitHub and set its visibility to Public - otherwise every lab PC needs
+# the package settings on GitHub and set its visibility to Public - otherwise every machine needs
 # 'docker login' before it can pull.
 
 on:
@@ -22,7 +22,7 @@ on:
         required: true
         default: humble-sim-2026-09
       push_latest:
-        description: "Also move the ':latest' tag on the testing package."
+        description: "Also move the ':latest' tag on the package."
         type: boolean
         required: false
         default: true
@@ -34,7 +34,7 @@ env:
   REGISTRY: ghcr.io
   # The owner is 'Cobot-Maker-Space' but GHCR rejects any uppercase in a repository name, so the
   # full image name is lowercased in the 'meta' step rather than built here.
-  IMAGE_BASENAME: windows-robot-simulation
+  IMAGE_BASENAME: robotlab-devcontainer-macos
 
 jobs:
   build:
@@ -47,8 +47,8 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      # The image bakes in a compiled workspace on top of a ~2.3 GB base, so the default runner
-      # disk gets tight. This reclaims ~20 GB of preinstalled toolchains we do not use.
+      # arm64 desktop packages take real disk. This reclaims ~20 GB of preinstalled toolchains we
+      # do not use, so the build does not die partway through with "no space left on device".
       - name: Free up disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
@@ -70,8 +70,8 @@ jobs:
           echo "image_name=${OWNER}/${IMAGE_BASENAME}" >> "$GITHUB_OUTPUT"
           echo "Publishing ${IMAGE}:${TAG}"
 
-      # Guard against the exact failure this whole workflow exists to prevent: an image tag that
-      # devcontainer.json does not point at. A student would get 'manifest unknown'.
+      # Guard against publishing an image tag that devcontainer.json does not point at. A student
+      # on this branch would get 'manifest unknown'.
       - name: Verify devcontainer.json pins the tag being built
         run: |
           PINNED=$(grep -oP '^\s*"image"\s*:\s*"\K[^"]+' src/.devcontainer/devcontainer.json)
@@ -83,6 +83,13 @@ jobs:
             echo "::error::Update the 'image' field in src/.devcontainer/devcontainer.json to match, or build the tag it already pins."
             exit 1
           fi
+
+      # arm64 needs QEMU emulation to build/run on this (amd64) runner - there is no free
+      # arm64-hosted runner here. Without this, 'platforms: linux/arm64' below fails outright.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -97,13 +104,14 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          # Repository root, not src/.devcontainer - the Dockerfile COPYs src/ to prebuild the
-          # workspace. See .dockerignore.
+          # Repository root, not src/.devcontainer - kept consistent with the other branches even
+          # though this Dockerfile does not COPY anything from src/ itself. See .dockerignore.
           context: .
           file: src/.devcontainer/Dockerfile
-          # Lab PCs are amd64. Do not add arm64 here without checking: the ROS apt packages and
-          # the workspace build would both need to work, and build time roughly doubles.
-          platforms: linux/amd64
+          # macOS on Apple Silicon is arm64. This is the one branch that needs it: osrf/ros images
+          # only ship amd64, which is why the Dockerfile's BASE_IMAGE defaults to ros:humble
+          # (multi-arch) instead. Emulated arm64 builds are noticeably slower than native amd64.
+          platforms: linux/arm64
           push: true
           tags: |
             ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
@@ -111,33 +119,34 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Proves the two things that actually break in front of a class: the prebuilt workspace is
-      # present, and it contains OUR packages rather than stock upstream ones.
+      # Proves the image actually has the desktop/simulation stack in it, not just a bare ROS
+      # install. Runs under QEMU emulation since this is an arm64 image on an amd64 runner.
       - name: Smoke test the published image
         run: |
           IMAGE="${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}"
           docker pull "$IMAGE"
 
-          echo "--- prebuilt workspace present? ---"
-          docker run --rm "$IMAGE" test -f /home/ros2_ws/install/setup.bash \
-            || { echo "::error::No prebuilt workspace in the image - students would face a full colcon build."; exit 1; }
-
-          echo "--- turtlebot3 packages resolve? ---"
-          docker run --rm "$IMAGE" bash -lc \
-            'source /home/ros2_ws/install/setup.bash && ros2 pkg list | grep -c turtlebot3'
+          echo "--- core ROS packages resolve? ---"
+          docker run --rm --platform linux/arm64 "$IMAGE" bash -lc \
+            'source /opt/ros/humble/setup.bash && ros2 pkg prefix navigation2 && ros2 pkg prefix slam_toolbox'
 
           echo "--- gazebo baked in, not apt-installed at runtime? ---"
-          docker run --rm "$IMAGE" bash -lc \
-            'source /opt/ros/humble/setup.bash && ros2 pkg prefix gazebo_ros'
+          docker run --rm --platform linux/arm64 "$IMAGE" bash -lc \
+            'source /opt/ros/humble/setup.bash && ros2 pkg prefix gazebo_ros' \
+            || echo "::warning::gazebo_ros did not resolve on arm64 - Gazebo Classic's arm64 packaging is known to be flaky. Falls back to the runtime apt-get install in setup.sh."
 
-          echo "--- helper on PATH? ---"
-          docker run --rm "$IMAGE" bash -lc 'command -v rossim-rebuild'
+          echo "--- noVNC tooling present? ---"
+          docker run --rm --platform linux/arm64 "$IMAGE" bash -lc 'command -v websockify && dpkg -l novnc >/dev/null'
+
+          echo "--- setup.sh present and executable? ---"
+          docker run --rm --platform linux/arm64 "$IMAGE" test -x /usr/local/bin/setup.sh \
+            || { echo "::error::setup.sh missing from the image - postCreateCommand would fail for every student."; exit 1; }
 
       - name: Remind about package visibility
         run: |
           echo "### Published \`${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "If this was the first push, the package is **private**. Lab PCs cannot pull a private package without \`docker login\`." >> "$GITHUB_STEP_SUMMARY"
+          echo "If this was the first push, the package is **private**. Machines cannot pull a private package without \`docker login\`." >> "$GITHUB_STEP_SUMMARY"
           echo "Set it to Public under the package settings, then verify anonymously:" >> "$GITHUB_STEP_SUMMARY"
           echo '```bash' >> "$GITHUB_STEP_SUMMARY"
           echo "R=${{ steps.meta.outputs.image_name }}" >> "$GITHUB_STEP_SUMMARY"

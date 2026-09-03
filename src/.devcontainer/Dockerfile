@@ -1,6 +1,8 @@
-FROM ros:humble
-# FROM ghcr.io/sloretz/ros:humble-desktop
-# FROM osrf/ros:humble-desktop-full  
+# Officially published multi-arch ROS base (amd64 + arm64). osrf/ros:humble-desktop-full
+# was tried here before but only ships amd64, which breaks the build on Apple Silicon (macOS
+# branch) - keep this as ros:humble and add desktop/Gazebo packages explicitly below instead.
+ARG BASE_IMAGE=ros:humble
+FROM ${BASE_IMAGE}
 
 ARG USERNAME=team
 ARG USER_UID=1000
@@ -30,8 +32,8 @@ RUN apt-get update && apt-get install -y \
     ros-humble-navigation2 ros-humble-nav2-bringup ros-humble-slam-toolbox \
     ros-humble-teleop-twist-keyboard \
     ros-humble-rqt* \
-   # ros-humble-gazebo-ros-pkgs \
-   # ros-humble-gazebo-plugins \
+    ros-humble-gazebo-ros-pkgs \
+    ros-humble-gazebo-plugins \
     ros-humble-cartographer ros-humble-cartographer-ros \
     ros-humble-rviz2 \
     # VNC + Desktop + noVNC
