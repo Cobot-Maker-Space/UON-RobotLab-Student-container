@@ -1,27 +1,61 @@
-# 📘 `build-image.yml` explained, block by block
+# 📘 `build-image.yml` explained, block by block — macOS branch
 
-**What this is:** a walkthrough of `.github/workflows/build-image.yml` — the GitHub Actions
-workflow that builds and publishes the ROS 2 container image the Windows deployment depends on.
+**What this is:** a walkthrough of `.github/workflows/build-image.yml` **as it exists on this
+`macos` branch** - what it publishes, why it's built the way it is, and exactly how to run it.
+Each OS branch (`windows`, `linux`, `macos`) carries its own copy of this workflow, tuned for that
+OS; this file documents the `macos` branch's copy specifically. If you're comparing branches,
+the shape is identical everywhere - only `IMAGE_BASENAME`, `platforms`, and a couple of smoke-test
+details change.
 
 **Who it is for:** someone who has not written CI before, who needs to understand not just *what*
-each block does but *why it is there*, well enough to defend it in a review.
+each block does but *why it is there*, well enough to defend it in a review - and who wants to
+actually click the button and run it without guessing.
 
-Read Part 1 if "workflow", "runner" and "action" are new words. Skip to Part 3 if they aren't.
+Read Part 1 if "workflow", "runner" and "action" are new words. Skip to Part 3 if they aren't. If
+you just want to run this thing right now, skip straight to Part 4.
 
 ---
 
-## Part 0 — The 60-second version
+## Part 0 — What changed on this branch (and why this file was rewritten)
 
-The workflow does six useful things, in order:
+This branch used to have a `build-image.yml` copied verbatim from a different, older project of
+mine with a similar setup. That original file assumed two things that were not true here:
 
-1. Works out **what image name and tag** it is about to publish.
-2. **Refuses to run** if that does not match what `devcontainer.json` tells students to pull.
-3. Builds the image on a GitHub machine — including compiling the whole ROS workspace inside it.
+1. **That `devcontainer.json` pulls a prebuilt image via an `"image"` field.** This repo's
+   `devcontainer.json` instead had a `"build"` block (a local `Dockerfile` build) with an unused
+   `BASE_IMAGE` arg - the Dockerfile's `FROM` line was hardcoded and silently ignored it. Both are
+   now fixed: the Dockerfile takes `ARG BASE_IMAGE` properly, and `devcontainer.json` on this
+   branch now has an `"image"` field pointing at what this workflow publishes.
+2. **That the image bakes a fully-compiled ROS workspace into `/home/ros2_ws`.** This repo instead
+   bind-mounts the host's `src/` folder and `cache/humble/{build,install,log}` over that same
+   path (see `devcontainer.json`'s `mounts`), and builds the workspace at *container-creation*
+   time via `postCreateCommand` → `setup.sh`. A baked-in workspace would be immediately shadowed
+   by those mounts, so it's not something this workflow tries to do. What it publishes instead is
+   a **base image**: ROS 2 Humble, the desktop/Gazebo/noVNC apt packages, and `setup.sh` - nothing
+   from `src/` at all. Students still get one warm `colcon build` at first container creation
+   (fast, since `cache/humble/` already ships pre-populated in the repo); what they skip is the
+   ~10 minute apt-get-everything step that used to happen on every local `docker build`.
+
+
+Everything below documents the workflow **as it now stands** on this branch - not the file it was
+copied from.
+
+---
+
+## Part 0.5 — The 60-second version
+
+The workflow does five useful things, in order:
+
+1. Works out **what image name and tag** it is about to publish:
+   `ghcr.io/cobot-maker-space/robotlab-devcontainer-macos:<tag>`.
+2. **Refuses to run** if that does not match what this branch's `devcontainer.json` pins.
+3. Builds the arm64 image on a GitHub-hosted runner, cross-built under QEMU emulation since GitHub's runners are amd64.
 4. Pushes it to GHCR (GitHub's container registry).
-5. **Pulls it back and tests it**, to prove the thing it just published actually works.
-6. Reminds you that new packages are private and nobody can pull them yet.
+5. **Pulls it back and smoke-tests it**, to prove the thing it just published actually has ROS,
+   Gazebo, and noVNC in it - then reminds you to make the package public.
 
-Steps 2 and 5 are the ones worth defending. Everything else is plumbing.
+Step 2 is the one worth defending most. Step 5 is the one that catches a "successful" build that's
+actually useless.
 
 ---
 
@@ -30,13 +64,13 @@ Steps 2 and 5 are the ones worth defending. Everything else is plumbing.
 | Term | What it means here |
 |---|---|
 | **GitHub Actions** | GitHub's built-in automation. You commit a YAML file describing a job; GitHub runs it on their machines. |
-| **Workflow** | One YAML file under `.github/workflows/`. This repo has exactly one. |
-| **Runner** | The temporary virtual machine your job runs on. Ours is `ubuntu-latest`. It is destroyed afterwards — nothing persists between runs except explicit caches. |
+| **Workflow** | One YAML file under `.github/workflows/`. Every OS branch has its own copy of this same file. |
+| **Runner** | The temporary virtual machine your job runs on: `ubuntu-latest`, always amd64 even when the *image being built* targets a different architecture (see the Build and push step in Part 3). It is destroyed after the run - nothing persists except explicit caches. |
 | **Job** | A group of steps that run on one runner. We have a single job, `build`. |
-| **Step** | One thing in the list. Either a shell command (`run:`) or a prebuilt component (`uses:`). |
+| **Step** | One thing in the list: a shell command (`run:`) or a prebuilt component (`uses:`). |
 | **Action** | A reusable component someone else wrote, referenced with `uses:`. `actions/checkout@v4` means version 4 of GitHub's official checkout action. |
-| **GHCR** | GitHub Container Registry, `ghcr.io`. Where the built image is stored so lab PCs can pull it. |
-| **Expression** `${{ ... }}` | Evaluated **by GitHub before the shell ever sees it**. This matters — see the warning in Part 3.4. |
+| **GHCR** | GitHub Container Registry, `ghcr.io`. Where the built image is stored so machines can pull it. |
+| **Expression** `${{ ... }}` | Evaluated **by GitHub before the shell ever sees it** - see the security note in Part 3.4. |
 
 One idea that trips everyone up at first: **the runner starts empty every time.** Your repository
 is not there until you check it out. Nothing you build survives unless you push it somewhere.
@@ -45,19 +79,14 @@ is not there until you check it out. Nothing you build survives unless you push 
 
 ## Part 2 — Why this workflow exists at all
 
-Before it, the image was built by hand on somebody's laptop and pushed manually. That produced a
-specific, expensive failure, recorded in the file's own header:
+Before any of this existed, images were built by hand on a laptop and pushed manually, which is
+exactly the kind of process that produces a tag mismatch nobody notices until a whole room of
+students hits `manifest unknown` at the same time: the registry has one tag, `devcontainer.json`
+pins a different (or nonexistent) one, and nothing ever checked that the two agreed.
 
-> The production package ended up with a single tag (`2026-08-07`) while `devcontainer.json` pinned
-> `:latest` — a tag that never existed, so every student got `manifest unknown`.
-
-Two independent things had to agree — the tag that exists in the registry, and the tag students are
-told to pull — and nothing checked that they did. Discovering the mismatch took a room full of
-students failing at once.
-
-**So the workflow is not really about automation. It is about making that mismatch impossible.**
-That is the argument to lead with if anyone asks why this exists. Automation is a side benefit;
-the guard in Part 3.6 is the point.
+**So this workflow is not really about automation. It is about making that mismatch structurally
+impossible**, and about not needing a local macOS apt-get-everything build before you can even
+open the devcontainer. That is the argument to lead with if anyone asks why this exists.
 
 ---
 
@@ -66,65 +95,44 @@ the guard in Part 3.6 is the point.
 ### 3.1 `name:`
 
 ```yaml
-name: Build dev container image
+name: Build dev container image (macOS / arm64)
 ```
 
-The label shown in the Actions tab. Purely cosmetic, but it is what you click, so it should say
-what it does.
+The label shown in the Actions tab, and how you'll tell this branch's run apart from the other two
+OS branches' runs when several show up in the same Actions history.
 
 ### 3.2 `on:` — what makes it run
-
-```yaml
-on:
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "Image tag to publish (e.g. humble-sim-2026-09). Must match the pin in devcontainer.json."
-        required: true
-        default: humble-sim-2026-09
-      push_latest:
-        description: "Also move the ':latest' tag on the testing package."
-        type: boolean
-        required: false
-        default: true
-  push:
-    tags:
-      - "humble-sim-*"
-```
 
 Two triggers, and **notably not a third**:
 
 | Trigger | Fires when |
 |---|---|
-| `workflow_dispatch` | You click **Run workflow** in the Actions tab and fill in the form. `inputs:` defines that form. |
-| `push: tags:` | Someone pushes a git tag whose name starts with `humble-sim-`. |
-| ~~`push: branches:`~~ | **Absent on purpose.** Pushing a branch publishes nothing. |
+| `workflow_dispatch` | You click **Run workflow** in the Actions tab and fill in the form (`inputs: tag`, `inputs: push_latest`). |
+| `push: tags: "humble-sim-*"` | Someone pushes a git tag matching that pattern, **on a commit that's on this branch**. |
+| ~~`push: branches:`~~ | **Absent on purpose.** Pushing a commit to `macos` publishes nothing by itself. |
 
-**Why no branch trigger?** This job takes 20-40 minutes and publishes something the whole lab
-pulls. Publishing on every commit to a branch would mean an unfinished edit could silently become
-what students download. Publishing must be a deliberate act.
+**Why no branch trigger?** This job takes real time and publishes something students pull directly.
+Publishing on every commit would mean an unfinished edit could silently become what someone
+downloads. Publishing must be a deliberate act.
 
-**A gotcha worth knowing:** `workflow_dispatch` only shows a **Run workflow** button if the
-workflow file exists on the repository's **default branch**. That is why this file was added to
-`main` even though the deployment work happens elsewhere. Before it was there, the Actions API
-reported zero workflows and zero runs for this repo — the button simply did not exist.
-
-When you dispatch, GitHub runs the workflow file **from the branch you select**, not from `main`.
-`main` only makes the button appear.
+**A gotcha worth knowing:** `workflow_dispatch` only shows a **Run workflow** button in the Actions
+tab if a workflow file with this path exists on the repository's **default branch** (`main`). `main`
+carries its own copy of this file for exactly that reason - the button doesn't care what's in
+main's copy, it just needs a file to exist there. When you actually dispatch, use the **"Use
+workflow from"** dropdown to pick `macos` - GitHub then runs *that branch's* copy of this file,
+not main's. Picking the wrong branch there is the single most common way to get a confusing result
+(see Part 5).
 
 ### 3.3 `env:` — values used across the job
 
 ```yaml
 env:
   REGISTRY: ghcr.io
-  # The owner is 'Cobot-Maker-Space' but GHCR rejects any uppercase in a repository name, so the
-  # full image name is lowercased in the 'meta' step rather than built here.
-  IMAGE_BASENAME: windows-robot-simulation
+  IMAGE_BASENAME: robotlab-devcontainer-macos
 ```
 
-Two constants. The comment explains a real trap: our GitHub org is `Cobot-Maker-Space` with
-capitals, but **container registries reject uppercase in image names**. The owner therefore cannot
-be hardcoded here — it gets lowercased at runtime in 3.5.
+The org is `Cobot-Maker-Space` with capitals, but GHCR rejects uppercase in image names, so the
+owner gets lowercased at runtime in step 3.5 rather than hardcoded here.
 
 ### 3.4 `jobs:` — the runner and its permissions
 
@@ -137,161 +145,86 @@ jobs:
       packages: write
 ```
 
-`runs-on: ubuntu-latest` picks a fresh Ubuntu VM.
+Every run gets an automatic, short-lived credential called `GITHUB_TOKEN`. This block narrows what
+it may do: read the repo, publish packages, nothing else. Even a compromised build script couldn't
+use this token to touch the repo itself or any other repo.
 
-`permissions:` is the security-relevant part and is worth defending. Every run gets an automatic
-credential called `GITHUB_TOKEN`, created when the job starts and destroyed when it ends. This
-block narrows what that token may do:
+> ⚠️ **Security note on `${{ }}`.** Expressions are substituted by GitHub into the script *as
+> text* before bash ever runs. Untrusted text turned into `run:` blocks unmodified is the most
+> common Actions vulnerability. Every expression in this file comes from something only a
+> collaborator with write access controls (a form they filled in, or a tag they pushed) - never
+> from a fork's PR title or similar - so the exposure here is low, but never copy this pattern
+> onto a value an outside contributor controls.
 
-- `contents: read` — may read the repository. It cannot commit, push, or delete anything.
-- `packages: write` — may publish container images. That is the whole reason the job exists.
+### 3.5 Steps 1–3 — checkout, disk space, resolve name/tag
 
-Anything not listed is denied. So even if a build script were compromised, that token could not
-rewrite the repository, touch other repos, or open pull requests. **This is least privilege, stated
-explicitly rather than inherited.**
+Standard housekeeping, identical across all three branches:
 
-> ⚠️ **Security note on `${{ }}`.** Expressions are substituted by GitHub into the script *as text*
-> before bash runs. That means untrusted text (a branch name, a PR title) can become executable
-> shell. Our inputs come only from someone with write access clicking a form or pushing a tag, so
-> the exposure is low — but this is why you should never interpolate untrusted values into `run:`
-> blocks. It is the most common Actions vulnerability.
+- **Check out repository** (`actions/checkout@v4`) - the runner starts empty; this clones the repo.
+- **Free up disk space** - deletes ~20 GB of preinstalled toolchains (.NET, Android SDK, Haskell,
+  Boost) the runner ships with but this build never uses, so a desktop+Gazebo+noVNC image doesn't
+  die partway through with "no space left on device".
+- **Resolve image name and tag** (`id: meta`) - assembles `ghcr.io/cobot-maker-space/robotlab-devcontainer-macos`
+  once, plus the tag (from the dispatch form, or from `GITHUB_REF_NAME` on a tag push), and writes
+  them to `$GITHUB_OUTPUT` so later steps can read `steps.meta.outputs.*`. Shell variables don't
+  survive between steps - this file-based mechanism is why `id: meta` exists.
 
-### 3.5 The steps
-
-#### Step 1 — Check out repository
-
-```yaml
-- name: Check out repository
-  uses: actions/checkout@v4
-```
-
-The runner starts with an empty disk. This clones the repo onto it. Without it, every later step
-would fail with "file not found". `@v4` pins the major version so a future release cannot change
-behaviour underneath you.
-
-#### Step 2 — Free up disk space
-
-```yaml
-- name: Free up disk space
-  run: |
-    sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                /usr/local/share/boost "$AGENT_TOOLSDIRECTORY"
-    df -h /
-```
-
-**What:** deletes preinstalled toolchains we never use — .NET, the Android SDK, Haskell, Boost.
-
-**Why:** GitHub runners ship with a lot of preinstalled software and a limited disk (~14 GB free of
-~84 GB). Our image is a 2.3 GB base plus a fully compiled ROS workspace. Without this the build
-dies partway through with a confusing "no space left on device", after 20 minutes of work.
-
-`df -h /` prints free space to the log, so if it ever fails again you can see how close it was.
-
-#### Step 3 — Resolve image name and tag
-
-```yaml
-- name: Resolve image name and tag
-  id: meta
-  run: |
-    if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-      TAG="${{ inputs.tag }}"
-    else
-      TAG="${GITHUB_REF_NAME}"
-    fi
-    OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-    IMAGE="${REGISTRY}/${OWNER}/${IMAGE_BASENAME}"
-    echo "tag=${TAG}"   >> "$GITHUB_OUTPUT"
-    echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
-    echo "image_name=${OWNER}/${IMAGE_BASENAME}" >> "$GITHUB_OUTPUT"
-    echo "Publishing ${IMAGE}:${TAG}"
-```
-
-This assembles the full image name once, so later steps cannot disagree about it.
-
-**The `if`** handles the two triggers differently:
-- Manual run → the tag is whatever you typed in the form.
-- Tag push → the tag is the git tag name itself (`GITHUB_REF_NAME`). Push `humble-sim-2026-09` and
-  the image gets tagged `humble-sim-2026-09`. One name, no chance to mistype it twice.
-
-**The `tr`** lowercases the owner, solving the uppercase problem from 3.3.
-
-**`>> "$GITHUB_OUTPUT"`** is how a step publishes values to later steps. It is a real file; writing
-`key=value` lines to it makes them readable as `steps.meta.outputs.key`. `id: meta` is what gives
-this step the name `meta` in that reference. Shell variables do **not** survive between steps —
-each step is a separate shell — so this file is the mechanism.
-
-#### Step 4 — Verify devcontainer.json pins the tag being built ⭐
+### 3.6 Step 4 — Verify devcontainer.json pins the tag being built ⭐
 
 ```yaml
 - name: Verify devcontainer.json pins the tag being built
   run: |
     PINNED=$(grep -oP '^\s*"image"\s*:\s*"\K[^"]+' src/.devcontainer/devcontainer.json)
     EXPECTED="${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}"
-    echo "devcontainer.json pins: ${PINNED}"
-    echo "this build publishes:   ${EXPECTED}"
     if [ "${PINNED}" != "${EXPECTED}" ]; then
       echo "::error::devcontainer.json pins '${PINNED}' but this run publishes '${EXPECTED}'."
-      echo "::error::Update the 'image' field in src/.devcontainer/devcontainer.json to match, or build the tag it already pins."
       exit 1
     fi
 ```
 
-**This is the most important block in the file.** Everything else is standard; this is the part
-that exists because of a specific outage.
+**The most important block in the file.** It reads the image name+tag this branch's
+`devcontainer.json` actually points students at, compares it to what this run is about to publish,
+and **aborts before pushing anything** if they differ. Costs milliseconds; makes a whole-class
+`manifest unknown` outage structurally impossible.
 
-It reads the image name students will actually pull straight out of `devcontainer.json`, compares
-it to what this run is about to publish, and **aborts before publishing** if they differ.
+This is also *why* `devcontainer.json` on this branch was changed from a `"build"` block to an
+`"image"` field as part of the same set of changes that added this workflow - the check has
+nothing to grep for otherwise (a `"build"` block has no `"image"` key), and would have failed
+every single run.
 
-- `grep -oP` uses Perl regex; `\K` means "forget everything matched so far", so only the value
-  inside the quotes is printed.
-- `::error::` is a **workflow command** — GitHub recognises that prefix and renders the line as a
-  red annotation on the run summary, not just a log line.
-- `exit 1` fails the step, which fails the job. Nothing is pushed.
+There's a useful side effect: dispatching from the wrong branch (e.g. `main`, which has no
+`"image"` field) fails here, safely, before anything is built or pushed.
 
-**Why it matters:** without this, the two halves can drift, and the symptom appears at the worst
-possible moment — a whole class getting `manifest unknown` simultaneously. The check costs
-milliseconds and makes the original outage structurally impossible.
 
-There is a useful side effect: selecting the wrong branch fails here, safely. `main` has no
-`.devcontainer` directory, so `grep` finds no file, the step fails, and nothing is published.
+### 3.7 Step — Set up QEMU (arm64 only, this branch)
 
-> **Note:** GitHub runs `run:` blocks with `bash -e`, so a failing command aborts the step even
-> without an explicit check. That is why the missing-file case stops here rather than continuing
-> with an empty `PINNED`.
+```yaml
+- name: Set up QEMU
+  uses: docker/setup-qemu-action@v3
+  with:
+    platforms: arm64
+```
 
-#### Step 5 — Set up Docker Buildx
+`ubuntu-latest` runners are amd64. There is no free arm64-hosted GitHub runner, so building for
+`linux/arm64` here means cross-building under emulation. This step registers the QEMU binfmt
+handlers that let the amd64 runner execute arm64 instructions (slowly) during both the `docker
+build` and the later `docker run` smoke-test calls. Skip this step and `platforms: linux/arm64`
+below fails outright with no usable binfmt handler.
+
+### 3.8 Steps — Buildx, GHCR login, build and push
 
 ```yaml
 - uses: docker/setup-buildx-action@v3
-```
-
-Enables BuildKit, Docker's modern builder. We need it for the layer caching in step 7; the legacy
-builder cannot do it.
-
-#### Step 6 — Log in to GHCR
-
-```yaml
 - uses: docker/login-action@v3
   with:
     registry: ${{ env.REGISTRY }}
     username: ${{ github.actor }}
     password: ${{ secrets.GITHUB_TOKEN }}
-```
-
-Authenticates so the push can succeed. Note there is **no secret to manage**: `GITHUB_TOKEN` is
-generated automatically for the run and expires with it, and `github.actor` is whoever triggered
-it. Nobody has to create a personal access token, store it, or rotate it — and there is no
-long-lived credential to leak. This is a genuine advantage of building in CI rather than on a
-laptop, and worth saying out loud in a review.
-
-#### Step 7 — Build and push
-
-```yaml
 - uses: docker/build-push-action@v6
   with:
     context: .
     file: src/.devcontainer/Dockerfile
-    platforms: linux/amd64
+    platforms: linux/arm64
     push: true
     tags: |
       ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
@@ -300,121 +233,117 @@ laptop, and worth saying out loud in a review.
     cache-to: type=gha,mode=max
 ```
 
-The step that does the actual work, and where the 20-40 minutes goes.
+No secret to manage: `GITHUB_TOKEN` is generated automatically per run and expires with it, and
+`github.actor` is whoever triggered the run. Nothing long-lived to leak or rotate.
 
-**`context: .` is not the obvious choice and gets asked about.** The build context is the set of
-files sent to the builder, and it is the **repository root**, not the `.devcontainer` folder the
-Dockerfile lives in. That is because the Dockerfile does `COPY src/ ...` to bake in a
-pre-compiled workspace, and Docker can only copy from inside the context. `.dockerignore` at the
-root then trims what gets sent — without it the whole `.git` history would be uploaded on every
-build.
+**`context: .`** is the repository root, not `src/.devcontainer/` where the Dockerfile lives. The
+Dockerfile itself doesn't `COPY` anything from `src/` (there's no baked workspace - see Part 0),
+but keeping the context at the root matches the other branches and keeps `.dockerignore` (which
+excludes `.git` and the 221 MB `cache/` directory) doing useful work instead of nothing.
 
-**`platforms: linux/amd64`** — lab PCs are Intel/AMD. The file's comment records why arm64 is not
-here: the ROS apt packages and the workspace build would both have to work there, and build time
-roughly doubles. That is a decision with a stated cost, not an oversight.
+**`platforms: linux/arm64`** - Apple Silicon Macs are arm64. `osrf/ros:humble-desktop-full` (tried earlier on this branch) publishes amd64 only, which is why the Dockerfile's base was moved back to `ros:humble` - the one official ROS image with a real arm64 manifest. Building for the wrong architecture here doesn't fail
+loudly; it produces an image that pulls fine and then fails to *run* on the target machine, which
+is a much worse debugging experience. See the other branches for their own targets:
+windows and linux (both amd64, no QEMU needed).
 
-**The `tags` expression** is GitHub's version of a ternary, and it reads badly until you have seen
-it once:
+**`cache-from`/`cache-to: type=gha`** - Docker layers cached in GitHub's cache between runs.
+`mode=max` caches intermediate layers too, so a change near the end of the Dockerfile doesn't
+force a full apt-get rebuild.
 
-```
-${{ CONDITION && VALUE_IF_TRUE || VALUE_IF_FALSE }}
-```
-
-So: on a tag push, or when you ticked `push_latest`, also tag the image `:latest`. Otherwise
-produce an empty string, which the action ignores.
-
-**`cache-from` / `cache-to: type=gha`** store Docker layers in GitHub's cache between runs. Without
-this every run recompiles the entire ROS workspace from scratch. `mode=max` caches intermediate
-layers too, not just the final one — more storage, much faster rebuilds when you have only changed
-something near the end of the Dockerfile.
-
-#### Step 8 — Smoke test the published image ⭐
+### 3.9 Step — Smoke test the published image ⭐
 
 ```yaml
 - name: Smoke test the published image
   run: |
     IMAGE="${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}"
     docker pull "$IMAGE"
+    echo "--- core ROS packages resolve? ---"
+    docker run --rm --platform linux/arm64 "$IMAGE" bash -lc 'source /opt/ros/humble/setup.bash && ros2 pkg prefix navigation2 && ros2 pkg prefix slam_toolbox'
 
-    docker run --rm "$IMAGE" test -f /home/ros2_ws/install/setup.bash \
-      || { echo "::error::No prebuilt workspace in the image - students would face a full colcon build."; exit 1; }
+    echo "--- gazebo baked in, not apt-installed at runtime? ---"
+    docker run --rm --platform linux/arm64 "$IMAGE" bash -lc 'source /opt/ros/humble/setup.bash && ros2 pkg prefix gazebo_ros' \
+      || echo "::warning::gazebo_ros did not resolve on arm64 - falls back to the runtime apt-get in setup.sh"
 
-    docker run --rm "$IMAGE" bash -lc \
-      'source /home/ros2_ws/install/setup.bash && ros2 pkg list | grep -c turtlebot3'
+    echo "--- noVNC tooling present? ---"
+    docker run --rm --platform linux/arm64 "$IMAGE" bash -lc 'command -v websockify && dpkg -l novnc >/dev/null'
 
-    docker run --rm "$IMAGE" bash -lc \
-      'source /opt/ros/humble/setup.bash && ros2 pkg prefix gazebo_ros'
-
-    docker run --rm "$IMAGE" bash -lc 'command -v rossim-rebuild'
+    echo "--- setup.sh present and executable? ---"
+    docker run --rm --platform linux/arm64 "$IMAGE" test -x /usr/local/bin/setup.sh
 ```
 
-The second block worth defending. It **pulls the image back from the registry** — not the local
-copy — and checks four things that would otherwise only be discovered by a student:
+Pulls the image **back from the registry** - not the local build cache - and checks four things
+that would otherwise only be discovered by a student:
 
 | Check | The disaster it catches |
 |---|---|
-| `install/setup.bash` exists | The prebuild silently failed. The image would still be *valid*, just useless — every student would sit through a 20-minute `colcon build`. **This is the headline feature; only an explicit assertion catches its absence.** |
-| TurtleBot3 packages resolve | The workspace built but our customised packages are not actually there. |
-| `gazebo_ros` resolves | Gazebo is baked into the image rather than apt-installed at container start, which would make a working network a hard requirement for starting a container. |
-| `rossim-rebuild` on PATH | The student-facing rebuild helper made it into the image and is executable. |
+| `navigation2` / `slam_toolbox` resolve | The apt-get step silently failed or a package was renamed upstream; the "ROS install" is missing the packages this repo actually needs. |
+| `gazebo_ros` resolves | Gazebo Classic's arm64 packaging is known to be flaky, so this check is a warning, not a hard failure (see setup.sh, which apt-get-installs it at runtime as a fallback). |
+| `websockify` + `novnc` present | The noVNC half of "devcontainer + noVNC" didn't make it into the image - GUI access from the browser would be broken for everyone. |
+| `/usr/local/bin/setup.sh` present and executable | `postCreateCommand` (`bash /usr/local/bin/setup.sh`) would fail for every single student at container creation. |
 
-The general principle: **an image that builds is not the same as an image that works.** These four
-commands are the difference between finding out in CI and finding out in a classroom.
+The general principle: **an image that builds is not the same as an image that works.** These
+checks are the difference between finding out here and finding out in a classroom.
 
-#### Step 9 — Remind about package visibility
+### 3.10 Step — Remind about package visibility
 
-```yaml
-- name: Remind about package visibility
-  run: |
-    echo "### Published ..." >> "$GITHUB_STEP_SUMMARY"
-    ...
-```
-
-`$GITHUB_STEP_SUMMARY` is a file whose Markdown contents are rendered on the run's summary page.
-
-This prints a reminder that **new GHCR packages are private by default**, along with a
-copy-pasteable check for anonymous pull. A private package means every lab PC needs `docker login`
-before it can pull anything — a failure that looks like a networking problem and is not.
-
-This is institutional knowledge turned into something the tool tells you, instead of something the
-one person who knows has to remember.
+Writes a note to the run's summary page (`$GITHUB_STEP_SUMMARY`): new GHCR packages are **private**
+by default. A private package means every machine needs `docker login` before it can pull -
+a failure that looks like a networking problem and isn't. Includes a copy-pasteable anonymous-pull
+check using the package name from step 3.5.
 
 ---
 
-## Part 4 — How to run it
+## Part 4 — How to run this, specifically, on `macos`
 
 **Manually (normal case):**
 
-1. Actions tab → **Build dev container image** → **Run workflow**.
-2. **Use workflow from:** pick the deployment branch — *not* `main`.
-3. **tag:** type it explicitly, e.g. `humble-sim-2026-09`. It must equal the tag in that branch's
-   `devcontainer.json`, or step 4 stops the run.
-4. Run, then watch step 4 first — it fails in seconds if something is out of sync.
+1. GitHub → **Actions** tab → **Build dev container image (macOS / arm64)** in the
+   left sidebar.
+2. Click **Run workflow**.
+3. **Use workflow from:** the dropdown - pick **`macos`**. This is the step people get wrong;
+   picking `main` here runs main's copy of this file against main's `devcontainer.json`, which has
+   no `"image"` field and will fail step 3.6 immediately (safely - nothing gets published).
+4. **tag:** type the tag exactly as it appears in `macos`'s `src/.devcontainer/devcontainer.json`
+   `"image"` field, e.g. `humble-sim-2026-09`. If it doesn't match, step 3.6 stops the run and
+   tells you both values.
+5. **push_latest:** leave checked to also move `robotlab-devcontainer-macos:latest`, or uncheck to publish
+   only the dated tag.
+6. Click the green **Run workflow** button, then watch step 3.6 first - it fails in seconds if
+   something is out of sync, well before the arm64 build even starts.
+
+**What this actually does, end to end:** builds an arm64 image containing ROS 2 Humble, the
+navigation/SLAM/teleop/Gazebo/noVNC packages, and `setup.sh`, from `src/.devcontainer/Dockerfile`
+at whatever's currently committed on `macos`; pushes it to
+`ghcr.io/cobot-maker-space/robotlab-devcontainer-macos` under the tag you typed (and `:latest` if ticked);
+pulls it back and runs the four smoke-test checks above against the *published* image; and posts a
+visibility reminder to the run summary. It does **not** touch `devcontainer.json`, does not touch
+any other branch, and does not deploy anything to a machine - see Part 7.
 
 **By tag push (alternative, needs nothing on `main`):**
 
 ```bash
-git tag humble-sim-2026-09 <branch>
+git tag humble-sim-2026-09 macos
 git push origin humble-sim-2026-09
 ```
 
-To re-run after a fix you must delete and re-push the tag, which is why the manual route is usually
-nicer:
+To re-run after a fix you must delete and re-push the tag:
 
 ```bash
 git push origin :refs/tags/humble-sim-2026-09
 git tag -d humble-sim-2026-09
 ```
 
-**Afterwards:** set the package visibility to Public the first time, then verify anonymous pull:
+**Afterwards (first publish only):** set the package visibility to Public - GitHub → the org's
+Packages tab → `robotlab-devcontainer-macos` → Package settings → Change visibility. Then verify anonymous
+pull:
 
 ```bash
-R=cobot-maker-space/windows-robot-simulation
+R=cobot-maker-space/robotlab-devcontainer-macos
 T=$(curl -s "https://ghcr.io/token?scope=repository:$R:pull&service=ghcr.io" | jq -r .token)
 curl -s -H "Authorization: Bearer $T" "https://ghcr.io/v2/$R/tags/list"
 ```
 
-Expect a tag list. `denied` means it is still private.
+Expect a tag list back. `denied` means it's still private.
 
 ---
 
@@ -422,57 +351,71 @@ Expect a tag list. `denied` means it is still private.
 
 | Step that failed | Almost certainly |
 |---|---|
-| Verify devcontainer.json pins... | The tag you typed ≠ the pin in that branch, **or** you selected a branch with no `.devcontainer` (e.g. `main`). The log prints both values — compare them. |
-| Free up disk space / Build | Out of disk. Check the `df -h` output. The image grew, or the cleanup list needs extending. |
+| Verify devcontainer.json pins... | The tag you typed ≠ the pin in `macos`'s `devcontainer.json`, **or** you dispatched from the wrong branch in step 3 of Part 4 (e.g. `main`, which has no `"image"` field at all). The log prints both values - compare them. |
+| Free up disk space / Build | Out of disk. Check the `df -h` output in the log. |
+| Set up QEMU / Build, arm64-related | Emulated arm64 builds are slow and occasionally flaky under QEMU. Re-run once; if it keeps failing, check whether the failing apt package has an arm64 build at all. |
 | Build and push, `denied` | Permissions. Check `packages: write` is still in the `permissions:` block. |
-| Build, a `RUN apt-get` line | An upstream package changed or a mirror was down. Re-run first before assuming it is your change. |
-| Build, the `colcon build` line | A genuine compile error in `src/`. This is your code, not CI. |
-| Smoke test, first check | The build "succeeded" but produced no compiled workspace. **Do not publish over this** — investigate the colcon step. |
-| Smoke test, `rossim-rebuild` | The helper was renamed or moved without updating the Dockerfile's `COPY`. |
+| Build, an `apt-get` line | An upstream package changed or a mirror was down. Re-run once before assuming it's a real regression. |
+| Smoke test, ROS packages | The apt-get step actually failed silently, or a package was renamed upstream. |
+| Smoke test, `gazebo_ros` | Expected sometimes on arm64 - this is a warning, not a failure, on this branch. setup.sh apt-get-installs Gazebo at container creation as a fallback if the image build didn't get it. |
+| Smoke test, noVNC tooling | `ubuntu-mate-desktop`/`novnc`/`websockify` were removed or renamed in the Dockerfile without updating this check (or vice versa). |
+| Smoke test, `setup.sh` | The `COPY setup.sh /usr/local/bin/setup.sh` line in the Dockerfile was changed or removed. |
 
 ---
 
 ## Part 6 — Decisions you may be asked to defend
 
 **"Why not build on a laptop and push? It worked before."**
-It produced the `manifest unknown` outage. CI gives three things a laptop cannot: the tag-vs-pin
-guard, smoke tests against the *published* artefact, and no long-lived registry credential to leak.
-It is also reproducible by anyone, not just the person whose laptop it was.
+It's exactly what produced the original `manifest unknown` outage this whole approach exists to
+prevent: two things (the registry tag, the `devcontainer.json` pin) that have to agree, with
+nothing checking that they do. CI adds the tag-vs-pin guard, a smoke test against the *published*
+artefact, and no long-lived registry credential sitting on someone's machine.
 
-**"Why does publishing need a manual click?"**
-Because the artefact is pulled by a whole cohort, and the build takes 20-40 minutes. Automatic
-publishing on every push would let an unfinished commit become what students download. Deliberate
-action is the safety property, not an inconvenience.
+**"Why publish a base image instead of building locally like before?"**
+The apt-get-everything step (ROS, navigation2, SLAM, Gazebo, a full desktop, noVNC) took real time
+on every fresh clone. Doing it once in CI and publishing the result means a student's first
+`docker pull` replaces that with a download.
 
-**"Why bake a compiled workspace into the image instead of building on the student's machine?"**
-Building took 10-25 minutes and used to happen on every container create, in class. Doing it once
-on a GitHub runner replaces 60 builds with one. The cost is a larger image, pulled ahead of time
-when nobody is waiting.
+**"Why not bake the compiled turtlebot3 workspace into the image too, like the other project's
+image does?"**
+Because this repo's `devcontainer.json` bind-mounts the host `src/` and `cache/humble/` directly
+over `/home/ros2_ws/{src,build,install,log}`. A workspace baked into the image at that path would
+be immediately shadowed by those mounts the moment the container starts - you'd pay the CI time
+and image-size cost and get nothing for it. The workspace build stays where it already worked:
+`postCreateCommand` → `setup.sh`, at container creation, with `cache/humble/` in the repo keeping
+it fast after the first run.
 
-**"Why a dated tag rather than `:latest`?"**
-So a mid-term push cannot change what a running class is using. `:latest` is a moving target; a
-dated tag is a promise.
+**"Why does publishing need a manual click, or a deliberately pushed tag?"**
+Because the artefact is pulled by everyone using this branch. Automatic publishing on every commit
+would let an unfinished edit silently become what someone downloads. Deliberate action is the
+safety property, not an inconvenience.
+
+**"Why arm64 only?"**
+Apple Silicon Macs are arm64. `osrf/ros:humble-desktop-full` (tried earlier on this branch) publishes amd64 only, which is why the Dockerfile's base was moved back to `ros:humble` - the one official ROS image with a real arm64 manifest. Building the wrong architecture wouldn't fail the build - it would produce an image
+that pulls fine and then doesn't run, which is worse to debug than a build failure.
 
 **"Are the smoke tests not overkill?"**
-The first one catches an image that builds successfully and is completely useless. That failure is
-invisible to `docker build` and visible to every student simultaneously. Four `docker run`
-commands is a very cheap insurance premium.
+The noVNC check exists because "GUI in the browser" is the entire point of this repo's devcontainer
+setup, and it's exactly the kind of thing that's silently missing from an image that otherwise
+builds cleanly. Four `docker run` commands is a very cheap insurance premium against finding that
+out in front of a class.
 
 ---
 
 ## Part 7 — What this workflow does *not* do
 
-Worth knowing, and worth saying before someone else points it out:
-
 - **It does not set package visibility.** First publish is private; a human must change it. The
-  workflow can only remind you.
-- **It does not update `devcontainer.json`.** It only checks the pin. Moving to a new tag is a
-  deliberate commit.
-- **It does not deploy to any machine.** Publishing an image and rolling it out are separate;
-  rollout is `Install-RobotLab.ps1` plus a workspace reset.
-- **It does not test the Windows side.** No PowerShell, no Docker Desktop, no VS Code involved.
-  Everything about the launcher is still tested by hand on a real machine.
-- **It does not build arm64.** Deliberate — see 3.5, step 7.
+  workflow can only remind you (step 3.10).
+- **It does not update `devcontainer.json`.** It only checks the pin (step 3.6). Moving to a new
+  tag is a deliberate, separate commit.
+- **It does not bake a compiled workspace into the image.** See Part 0 and Part 6 - that build
+  still happens at container-creation time via `setup.sh`.
+- **It does not deploy anything to a machine.** Publishing an image and a student actually pulling
+  it via VS Code's Dev Containers extension are separate steps.
+- **It does not build any architecture other than arm64** on this branch. See windows and linux (both amd64, no QEMU needed)
+  for the others.
+- **It does not touch any other branch's image or workflow.** Each OS branch publishes to its own,
+  differently-named GHCR package.
 
 ---
 
@@ -480,15 +423,15 @@ Worth knowing, and worth saying before someone else points it out:
 
 | Term | Meaning |
 |---|---|
-| **Runner** | The throwaway VM a job runs on. Starts empty, is destroyed after. |
+| **Runner** | The throwaway VM a job runs on. Always `ubuntu-latest`/amd64 here, even for the arm64 build on this branch. |
 | **`uses:`** | Run a prebuilt action written by someone else. |
-| **`run:`** | Run shell commands. Uses `bash -e` on Linux, so any failing command aborts the step. |
+| **`run:`** | Run shell commands. Uses `bash -e`, so a failing command aborts the step. |
 | **`GITHUB_TOKEN`** | An automatic, short-lived credential scoped by the `permissions:` block. |
 | **`$GITHUB_OUTPUT`** | A file a step writes `key=value` into so later steps can read `steps.<id>.outputs.<key>`. |
 | **`$GITHUB_STEP_SUMMARY`** | A file whose Markdown is rendered on the run summary page. |
-| **`::error::`** | A workflow command; makes GitHub display the line as a red annotation. |
+| **`::error::` / `::warning::`** | Workflow commands; GitHub renders the line as a red or yellow annotation on the run. |
 | **Build context** | The files sent to the Docker builder. Here the repo root, trimmed by `.dockerignore`. |
-| **Buildx / BuildKit** | Docker's modern builder. Needed for the layer caching used here. |
-| **Layer cache (`type=gha`)** | Docker layers stored in GitHub's cache between runs, so unchanged steps are not rebuilt. |
+| **Buildx / BuildKit** | Docker's modern builder. Needed for the layer caching used here (and, on this branch, cross-arch emulation via QEMU). |
+| **Layer cache (`type=gha`)** | Docker layers stored in GitHub's cache between runs, so unchanged steps aren't rebuilt. |
 | **GHCR** | GitHub Container Registry, `ghcr.io`. New packages are private by default. |
-| **`manifest unknown`** | Registry-speak for "that tag does not exist". The error this workflow exists to prevent. |
+| **`manifest unknown`** | Registry-speak for "that tag does not exist". The failure step 3.6 exists to prevent. |
