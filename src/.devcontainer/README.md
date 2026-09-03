@@ -62,7 +62,7 @@ git config --global core.longpaths true
 
    ```bash
    cd ~
-   git clone https://github.com/Cobot-Maker-Space/UON-CS-robotlab-simulation-container.git
+   git clone --branch windows --single-branch https://github.com/Cobot-Maker-Space/UON-RobotLab-Student-container.git
    ```
 
 6. Start the noVNC Service
@@ -70,9 +70,9 @@ git config --global core.longpaths true
    Before opening the devcontainer, make sure the shared Docker network and noVNC service are running.
 
    ```bash
-   cd ~/UON-CS-robotlab-simulation-container/src/.devcontainer/
-   chmod +x start_novnc.sh
-   ./start_novnc.sh start
+   cd ~/UON-RobotLab-Student-container/src/.devcontainer/
+   chmod +x start_vnc.sh
+   ./start_vnc.sh start
    ```
 
    This will:
@@ -95,7 +95,7 @@ git config --global core.longpaths true
 
    **Dev Containers: Reopen in Container**
 
-   VS Code will now build and launch the ROS 2 development container, automatically attaching it to the `ros` network so it can reach the noVNC container.
+   VS Code will now pull the prebuilt ROS 2 development image and launch it, automatically attaching it to the `ros` network so it can reach the noVNC container.
 
 8. Test the Setup
 
@@ -113,9 +113,9 @@ git config --global core.longpaths true
 | Issue | Solution |
 |---|---|
 | `docker` command not found / permission denied in WSL2 | Confirm Docker Desktop's WSL Integration is enabled for your Ubuntu distro (**Settings → Resources → WSL Integration**). Unlike native Linux, you do **not** need to add your user to a `docker` group — Docker Desktop handles this. |
-| `start_novnc.sh: bad interpreter: /bin/bash^M` | The script has Windows (CRLF) line endings. Run `dos2unix start_novnc.sh` inside WSL2, or re-clone after setting `git config --global core.autocrlf input` (see step 4). |
+| `start_vnc.sh: bad interpreter: /bin/bash^M` | The script has Windows (CRLF) line endings. Run `dos2unix start_vnc.sh` inside WSL2, or re-clone after setting `git config --global core.autocrlf input` (see step 4). |
 | Gazebo spawn service failed | Don't Ctrl+C — let it fail completely, then close and restart. |
-| Cannot connect to noVNC | Run `./start_novnc.sh status` to check if the container is running. |
+| Cannot connect to noVNC | Run `./start_vnc.sh status` to check if the container is running. |
 | Webcam (`/dev/video0`) not accessible | `/dev/video0` is a Linux device path with no Windows equivalent through Docker Desktop's WSL2 backend. Passing a USB webcam through requires [usbipd-win](https://github.com/dorssel/usbipd-win) to attach the device into WSL2 first. If you don't need real camera hardware, remove `--device=/dev/video0` and `--group-add=video` from `devcontainer.json`'s `runArgs`. |
 | `Unable to create file [..]: Filename too long` on clone | Run `git config --global core.longpaths true` (see step 4). |
 | Dev container build is very slow / VS Code feels laggy | Make sure the repo was cloned inside the WSL2 filesystem (e.g. `~/...`), not under `/mnt/c/...` or a Windows path opened via Remote-WSL. Cross-filesystem bind mounts are slow. |
