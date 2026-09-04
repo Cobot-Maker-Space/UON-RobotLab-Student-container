@@ -1,4 +1,3 @@
-
 #!/usr/bin/env bash
 set -euo pipefail
 IFS=$'\n\t'
@@ -17,18 +16,18 @@ SUDO=""
 if [ "$(id -u)" -ne 0 ]; then
   if command -v sudo >/dev/null 2>&1; then
     SUDO="sudo"
-    echo "Using sudo for package installs"
   else
     echo "Note: not running as root and sudo not found — skipping apt installs"
-    SUDO=""
   fi
-else
-  echo "Running as root"
 fi
 
-# Install Gazebo packages only if apt is available
-if [ -n "$SUDO" ] || [ "$(id -u)" -eq 0 ]; then
-  echo "Updating apt and installing gazebo packages..."
+# Gazebo is baked into the published image, so this is normally a no-op that costs nothing.
+# It only fires if you are on an older image, or on arm64 where Gazebo Classic's packaging is
+# occasionally incomplete — in which case it is worth the wait rather than failing later.
+if [ -d /opt/ros/humble/share/gazebo_ros ]; then
+  echo "✅ Gazebo ROS packages already in the image — skipping apt."
+elif [ -n "$SUDO" ] || [ "$(id -u)" -eq 0 ]; then
+  echo "⬇️  Gazebo ROS packages missing — installing them (this takes a few minutes)..."
   $SUDO apt-get update -y
   $SUDO apt-get install -y ros-humble-gazebo-ros-pkgs ros-humble-gazebo-plugins || {
     echo "Warning: apt-get install failed (continuing)."
@@ -39,10 +38,20 @@ fi
 mkdir -p "$SRC_DIR"
 cd "$SRC_DIR"
 
-# Clean build/install/log only if they exist and have content
-if [ -d "$WORKSPACE_DIR/build" ] || [ -d "$WORKSPACE_DIR/install" ] || [ -d "$WORKSPACE_DIR/log" ]; then
-  echo "Cleaning build/install/log directories (only inside) ..."
+# The repo ships a pre-populated cache/humble/{build,install,log}, bind-mounted over
+# ${WORKSPACE_DIR}/{build,install,log}. Those artefacts are architecture-specific and full of
+# absolute paths, so reusing an amd64 cache inside an arm64 container produces baffling link
+# errors. Stamp the cache with what produced it, and only wipe when the stamp does not match —
+# that way a normal rebuild is incremental (seconds) instead of a full build (many minutes).
+STAMP_FILE="${WORKSPACE_DIR}/build/.built-for"
+STAMP="$(uname -m)-${ROS_DISTRO:-humble}"
+
+if [ -f "$STAMP_FILE" ] && [ "$(cat "$STAMP_FILE")" = "$STAMP" ]; then
+  echo "✅ Existing build cache was built for ${STAMP} — building incrementally."
+else
+  echo "♻️  Build cache is missing or was built for something other than ${STAMP} — clearing it."
   rm -rf "${WORKSPACE_DIR}/build/"* "${WORKSPACE_DIR}/install/"* "${WORKSPACE_DIR}/log/"* || true
+  rm -f "$STAMP_FILE"
 fi
 
 # Repos to ensure present (name|url)
@@ -94,5 +103,7 @@ else
   exit 1
 fi
 
+# Only stamp after a build that actually succeeded, so a failed build is retried from clean.
+echo "$STAMP" > "$STAMP_FILE"
 
 echo "=== setup.sh finished successfully ==="

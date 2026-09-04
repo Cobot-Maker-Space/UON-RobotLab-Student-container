@@ -5,6 +5,13 @@
     "image": "ghcr.io/cobot-maker-space/robotlab-devcontainer-linux:humble-sim-2026-09",
     "workspaceFolder": "/home/ros2_ws",
     "workspaceMount": "source=${localWorkspaceFolder},target=/home/ros2_ws/src,type=bind",
+
+    // Runs on YOUR machine, before the container is created. It creates the 'ros' docker network
+    // and starts the noVNC container that this container draws on. Without it, "--network=ros"
+    // below fails with "network ros not found" and the dev container never comes up.
+    // You can still run the same script by hand: ./.devcontainer/start_vnc.sh {start|stop|status}
+    "initializeCommand": "bash \"${localWorkspaceFolder}/.devcontainer/start_vnc.sh\" start",
+
     "customizations": {
         "vscode": {
             "extensions":[
@@ -19,22 +26,24 @@
     },
     
     "containerEnv": {
+    // Not a local display - "novnc" is the hostname of the noVNC container on the 'ros' network.
     "DISPLAY": "novnc:0.0",
     "ROS_LOCALHOST_ONLY": "0",
     "ROS_DOMAIN_ID": "30",
     "RMW_IMPLEMENTATION": "rmw_fastrtps_cpp",
-    "TURTLEBOT3_MODEL": "waffle"
+    "TURTLEBOT3_MODEL": "waffle",
+    // RViz uses MIT-SHM by default, which does not work across a network X connection.
+    "QT_X11_NO_MITSHM": "1"
 },
     "runArgs": [
     // "--net=host",
-     "--network=ros",
-    // Native Linux Docker can pass host devices straight through. If your laptop has no
-    // /dev/video0 (no webcam), remove this line and --group-add=video below.
-    "--device=/dev/video0",
-    "--group-add=video"
+     "--network=ros"
+    // Native Linux Docker can pass a host webcam straight through. Uncomment both lines below
+    // if you actually need one - leaving them on breaks container creation on any machine that
+    // has no /dev/video0, which is most laptops without a built-in camera exposed to Docker.
+    // , "--device=/dev/video0"
+    // , "--group-add=video"
 ],
-
-"forwardPorts": [8080],
 
     "mounts": [
         
@@ -42,7 +51,8 @@
         "source=${localWorkspaceFolder}/../cache/humble/install,target=/home/ros2_ws/install,type=bind",
         "source=${localWorkspaceFolder}/../cache/humble/log,target=/home/ros2_ws/log,type=bind"
     ],
-    // For later uses run this command:
+    // Clones any missing turtlebot3 packages and builds the workspace. Incremental after the
+    // first run - see setup.sh.
     "postCreateCommand": "bash /usr/local/bin/setup.sh"
     
     // For first time users and setup use this command, then you can change it to the above one after everything is configured
