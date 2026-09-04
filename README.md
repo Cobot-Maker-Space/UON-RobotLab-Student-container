@@ -99,6 +99,7 @@ publishing).
 | **Port 8080 already in use** | Something else on your Mac is using it. Stop that, or start noVNC on another port:<br>`HOST_PORT=8081 ./src/.devcontainer/start_vnc.sh restart` |
 | **Gazebo spawn service failed** | Don't Ctrl+C — let it fail completely, then close and restart. |
 | **Gazebo is slow, or a rendering plugin fails to load** | Expected on Apple Silicon. There is no GPU passthrough into an arm64 container, so `LIBGL_ALWAYS_SOFTWARE=1` is set in `devcontainer.json` and everything renders on the CPU. Simulations run, just slower than on an amd64 machine. Keep worlds small. |
+| **`The requested image's platform (linux/amd64) does not match`** | Expected, and harmless. It refers to the noVNC container, not yours — `theasp/novnc` is published for amd64 only and runs under emulation on Apple Silicon. It only serves an X server over the network, so the architecture mismatch does not matter. |
 | **`no matching manifest for linux/arm64`** | You are pointed at an amd64 image. This branch pins the arm64 one; check the `image` field in `devcontainer.json` still reads `robotlab-devcontainer-macos`. |
 | **The workspace won't rebuild from scratch** | `rm -f cache/humble/build/.built-for` and rebuild the container. That stamp file is what tells `setup.sh` the cache is still valid. |
 
@@ -111,7 +112,9 @@ Two containers, on a shared Docker network called `ros`:
 - **the dev container** — ROS 2, Gazebo, your code. Draws on `DISPLAY=novnc:0.0`, which is the
   *other* container, not your Mac.
 - **the noVNC container** (`theasp/novnc`) — runs the X server and serves it to your browser on
-  port 8080. Started automatically by `start_vnc.sh` via `initializeCommand`.
+  port 8080. Started automatically by `start_vnc.sh` via `initializeCommand`. This one is an
+  amd64 image and runs emulated on Apple Silicon; that is fine, because all it does is speak the
+  X protocol over the network. Only the dev container needs to be native arm64.
 
 Other things worth knowing:
 
