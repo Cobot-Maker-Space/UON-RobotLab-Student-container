@@ -19,7 +19,7 @@ you just want to run this thing right now, skip straight to Part 4.
 ## Part 0 — What changed on this branch (and why this file was rewritten)
 
 This branch used to have a `build-image.yml` copied verbatim from a different, older project of
-mine with a similar setup. That original file assumed two things that were not true here:
+mine with a similar setup. That original file assumed three things that were not true here:
 
 1. **That `devcontainer.json` pulls a prebuilt image via an `"image"` field.** This repo's
    `devcontainer.json` instead had a `"build"` block (a local `Dockerfile` build) with an unused
@@ -36,7 +36,6 @@ mine with a similar setup. That original file assumed two things that were not t
    that `setup.sh` builds incrementally, so a container rebuild is seconds rather than minutes.
    What they skip entirely is the ~10 minute apt-get-everything step that used to happen on every
    local `docker build`.
-
 
 3. **That `context: .` (the repository root) was a safe default.** It was not: the Dockerfile does
    `COPY setup.sh`, which resolves relative to the build context, and there is no `setup.sh` at the
