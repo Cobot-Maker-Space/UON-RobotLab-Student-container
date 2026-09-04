@@ -31,11 +31,17 @@ mine with a similar setup. That original file assumed two things that were not t
    path (see `devcontainer.json`'s `mounts`), and builds the workspace at *container-creation*
    time via `postCreateCommand` → `setup.sh`. A baked-in workspace would be immediately shadowed
    by those mounts, so it's not something this workflow tries to do. What it publishes instead is
-   a **base image**: ROS 2 Humble, the desktop/Gazebo/noVNC apt packages, and `setup.sh` - nothing
-   from `src/` at all. Students still get one warm `colcon build` at first container creation
-   (fast, since `cache/humble/` already ships pre-populated in the repo); what they skip is the
-   ~10 minute apt-get-everything step that used to happen on every local `docker build`.
+   a **base image**: ROS 2 Humble, the Gazebo/Nav2/RViz apt packages, and `setup.sh` - nothing
+   from `src/` at all. Students still get one `colcon build` at first container creation; after
+   that `setup.sh` builds incrementally, so a container rebuild is seconds rather than minutes.
+   What they skip entirely is the ~10 minute apt-get-everything step that used to happen on every
+   local `docker build`.
 
+
+3. **That `context: .` (the repository root) was a safe default.** It was not: the Dockerfile does
+   `COPY setup.sh`, which resolves relative to the build context, and there is no `setup.sh` at the
+   repository root. Every run would have failed at that line. The context is now
+   `src/.devcontainer`, which is both correct and a far smaller upload.
 
 Everything below documents the workflow **as it now stands** on this branch - not the file it was
 copied from.
@@ -162,8 +168,8 @@ Standard housekeeping, identical across all three branches:
 
 - **Check out repository** (`actions/checkout@v4`) - the runner starts empty; this clones the repo.
 - **Free up disk space** - deletes ~20 GB of preinstalled toolchains (.NET, Android SDK, Haskell,
-  Boost) the runner ships with but this build never uses, so a desktop+Gazebo+noVNC image doesn't
-  die partway through with "no space left on device".
+  Boost) the runner ships with but this build never uses, so a ROS+Gazebo image doesn't die
+  partway through with "no space left on device".
 - **Resolve image name and tag** (`id: meta`) - assembles `ghcr.io/cobot-maker-space/robotlab-devcontainer-macos`
   once, plus the tag (from the dispatch form, or from `GITHUB_REF_NAME` on a tag push), and writes
   them to `$GITHUB_OUTPUT` so later steps can read `steps.meta.outputs.*`. Shell variables don't
@@ -222,7 +228,7 @@ below fails outright with no usable binfmt handler.
     password: ${{ secrets.GITHUB_TOKEN }}
 - uses: docker/build-push-action@v6
   with:
-    context: .
+    context: src/.devcontainer
     file: src/.devcontainer/Dockerfile
     platforms: linux/arm64
     push: true
@@ -236,10 +242,13 @@ below fails outright with no usable binfmt handler.
 No secret to manage: `GITHUB_TOKEN` is generated automatically per run and expires with it, and
 `github.actor` is whoever triggered the run. Nothing long-lived to leak or rotate.
 
-**`context: .`** is the repository root, not `src/.devcontainer/` where the Dockerfile lives. The
-Dockerfile itself doesn't `COPY` anything from `src/` (there's no baked workspace - see Part 0),
-but keeping the context at the root matches the other branches and keeps `.dockerignore` (which
-excludes `.git` and the 221 MB `cache/` directory) doing useful work instead of nothing.
+**`context: src/.devcontainer`** is the directory the Dockerfile lives in, not the repository
+root. This matters more than it looks: the Dockerfile does `COPY setup.sh /usr/local/bin/setup.sh`,
+and `COPY` paths are resolved **relative to the build context**, not to the Dockerfile. With the
+context at the repository root there is no `setup.sh` to find, and the build fails on that line
+every time. Pointing it here also means the upload is four small files rather than the whole repo
+including the 212 MB `cache/` directory - which is why there is no longer a `.dockerignore`; there
+is nothing left for it to exclude.
 
 **`platforms: linux/arm64`** - Apple Silicon Macs are arm64. `osrf/ros:humble-desktop-full` (tried earlier on this branch) publishes amd64 only, which is why the Dockerfile's base was moved back to `ros:humble` - the one official ROS image with a real arm64 manifest. Building for the wrong architecture here doesn't fail
 loudly; it produces an image that pulls fine and then fails to *run* on the target machine, which
@@ -264,22 +273,26 @@ force a full apt-get rebuild.
     docker run --rm --platform linux/arm64 "$IMAGE" bash -lc 'source /opt/ros/humble/setup.bash && ros2 pkg prefix gazebo_ros' \
       || echo "::warning::gazebo_ros did not resolve on arm64 - falls back to the runtime apt-get in setup.sh"
 
-    echo "--- noVNC tooling present? ---"
-    docker run --rm --platform linux/arm64 "$IMAGE" bash -lc 'command -v websockify && dpkg -l novnc >/dev/null'
+    echo "--- X client tooling present? ---"
+    docker run --rm --platform linux/arm64 "$IMAGE" bash -lc 'command -v xeyes'
 
     echo "--- setup.sh present and executable? ---"
     docker run --rm --platform linux/arm64 "$IMAGE" test -x /usr/local/bin/setup.sh
+
+    echo "--- workspace writable by the 'team' user? ---"
+    docker run --rm --platform linux/arm64 "$IMAGE" bash -lc 'touch /home/ros2_ws/build/.write-test && rm /home/ros2_ws/build/.write-test'
 ```
 
-Pulls the image **back from the registry** - not the local build cache - and checks four things
+Pulls the image **back from the registry** - not the local build cache - and checks five things
 that would otherwise only be discovered by a student:
 
 | Check | The disaster it catches |
 |---|---|
 | `navigation2` / `slam_toolbox` resolve | The apt-get step silently failed or a package was renamed upstream; the "ROS install" is missing the packages this repo actually needs. |
 | `gazebo_ros` resolves | Gazebo Classic's arm64 packaging is known to be flaky, so this check is a warning, not a hard failure (see setup.sh, which apt-get-installs it at runtime as a fallback). |
-| `websockify` + `novnc` present | The noVNC half of "devcontainer + noVNC" didn't make it into the image - GUI access from the browser would be broken for everyone. |
+| `xeyes` present | The X client tooling didn't make it into the image. `xeyes` is also the one-line check a student can run to prove the noVNC display is reachable, so it needs to be there. |
 | `/usr/local/bin/setup.sh` present and executable | `postCreateCommand` (`bash /usr/local/bin/setup.sh`) would fail for every single student at container creation. |
+| `/home/ros2_ws` writable by `team` | The workspace directories were created root-owned, so the very first `colcon build` dies on a permission error. This one had actually regressed once. |
 
 The general principle: **an image that builds is not the same as an image that works.** These
 checks are the difference between finding out here and finding out in a classroom.
@@ -312,10 +325,10 @@ check using the package name from step 3.5.
    something is out of sync, well before the arm64 build even starts.
 
 **What this actually does, end to end:** builds an arm64 image containing ROS 2 Humble, the
-navigation/SLAM/teleop/Gazebo/noVNC packages, and `setup.sh`, from `src/.devcontainer/Dockerfile`
+navigation/SLAM/teleop/Gazebo packages, and `setup.sh`, from `src/.devcontainer/Dockerfile`
 at whatever's currently committed on `macos`; pushes it to
 `ghcr.io/cobot-maker-space/robotlab-devcontainer-macos` under the tag you typed (and `:latest` if ticked);
-pulls it back and runs the four smoke-test checks above against the *published* image; and posts a
+pulls it back and runs the five smoke-test checks above against the *published* image; and posts a
 visibility reminder to the run summary. It does **not** touch `devcontainer.json`, does not touch
 any other branch, and does not deploy anything to a machine - see Part 7.
 
@@ -358,8 +371,10 @@ Expect a tag list back. `denied` means it's still private.
 | Build, an `apt-get` line | An upstream package changed or a mirror was down. Re-run once before assuming it's a real regression. |
 | Smoke test, ROS packages | The apt-get step actually failed silently, or a package was renamed upstream. |
 | Smoke test, `gazebo_ros` | Expected sometimes on arm64 - this is a warning, not a failure, on this branch. setup.sh apt-get-installs Gazebo at container creation as a fallback if the image build didn't get it. |
-| Smoke test, noVNC tooling | `ubuntu-mate-desktop`/`novnc`/`websockify` were removed or renamed in the Dockerfile without updating this check (or vice versa). |
+| Smoke test, X client tooling | `x11-apps` was removed or renamed in the Dockerfile without updating this check (or vice versa). |
+| Smoke test, workspace writable | The `mkdir -p` + `chown -R` of `/home/ros2_ws` was dropped from the Dockerfile, or moved after `USER $USERNAME`. |
 | Smoke test, `setup.sh` | The `COPY setup.sh /usr/local/bin/setup.sh` line in the Dockerfile was changed or removed. |
+| Build, `"/setup.sh": not found` | The build context was moved back to the repository root. `COPY` resolves against the context - see Part 3.8. |
 
 ---
 
@@ -383,7 +398,8 @@ over `/home/ros2_ws/{src,build,install,log}`. A workspace baked into the image a
 be immediately shadowed by those mounts the moment the container starts - you'd pay the CI time
 and image-size cost and get nothing for it. The workspace build stays where it already worked:
 `postCreateCommand` → `setup.sh`, at container creation, with `cache/humble/` in the repo keeping
-it fast after the first run.
+it fast after the first run. `setup.sh` stamps that cache with the architecture it was built for
+and only clears it on a mismatch, so an amd64 cache can't quietly corrupt an arm64 build.
 
 **"Why does publishing need a manual click, or a deliberately pushed tag?"**
 Because the artefact is pulled by everyone using this branch. Automatic publishing on every commit
@@ -395,10 +411,10 @@ Apple Silicon Macs are arm64. `osrf/ros:humble-desktop-full` (tried earlier on t
 that pulls fine and then doesn't run, which is worse to debug than a build failure.
 
 **"Are the smoke tests not overkill?"**
-The noVNC check exists because "GUI in the browser" is the entire point of this repo's devcontainer
-setup, and it's exactly the kind of thing that's silently missing from an image that otherwise
-builds cleanly. Four `docker run` commands is a very cheap insurance premium against finding that
-out in front of a class.
+Every one of them corresponds to something that has actually gone wrong here: an image that built
+cleanly but had no `setup.sh` in it, and a workspace whose directories were root-owned so the first
+`colcon build` failed on permissions. Five `docker run` commands is a very cheap insurance premium
+against finding either out in front of a class.
 
 ---
 
@@ -430,7 +446,7 @@ out in front of a class.
 | **`$GITHUB_OUTPUT`** | A file a step writes `key=value` into so later steps can read `steps.<id>.outputs.<key>`. |
 | **`$GITHUB_STEP_SUMMARY`** | A file whose Markdown is rendered on the run summary page. |
 | **`::error::` / `::warning::`** | Workflow commands; GitHub renders the line as a red or yellow annotation on the run. |
-| **Build context** | The files sent to the Docker builder. Here the repo root, trimmed by `.dockerignore`. |
+| **Build context** | The files sent to the Docker builder, and what `COPY` paths resolve against. Here `src/.devcontainer/`. |
 | **Buildx / BuildKit** | Docker's modern builder. Needed for the layer caching used here (and, on this branch, cross-arch emulation via QEMU). |
 | **Layer cache (`type=gha`)** | Docker layers stored in GitHub's cache between runs, so unchanged steps aren't rebuilt. |
 | **GHCR** | GitHub Container Registry, `ghcr.io`. New packages are private by default. |

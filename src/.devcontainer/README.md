@@ -1,126 +1,26 @@
-# 🐢 TurtleBot Desktop Development Container (with noVNC)
+# `.devcontainer` — macOS branch
 
-This repository provides a ready-to-use **Docker-based ROS 2 Humble development environment** for TurtleBot3 simulation and development.  
+Setup instructions live in the [repository README](../../README.md). This file used to be a
+verbatim copy of it, which meant the two drifted apart; it is a pointer now so there is only ever
+one set of instructions to keep correct.
 
-It includes:
-- ROS 2 Humble preinstalled with navigation, SLAM, teleop, Gazebo, and visualization packages  
-- VS Code Dev Container configuration with useful extensions  
-- Integrated **noVNC support** for GUI access from your browser  
-- Persistent build and install caches for faster rebuilds  
+## What is in here
 
-Whether you're running on Linux, macOS, or Windows, this container lets you start working with TurtleBot development in minutes.
+| File | What it does | Runs where |
+|---|---|---|
+| `devcontainer.json` | The dev container definition VS Code reads: which image to pull, what to mount, what environment ROS sees. | VS Code, on your machine |
+| `Dockerfile` | Builds the image that `devcontainer.json` pins. Not built locally — CI builds and publishes it, see [`decision.md`](../../decision.md). | GitHub Actions |
+| `setup.sh` | `postCreateCommand`. Clones any missing turtlebot3 packages and runs `colcon build`. Incremental after the first run. | Inside the container |
+| `start_vnc.sh` | Creates the `ros` Docker network and starts the noVNC container. Called automatically by `initializeCommand`; also usable by hand. | On your machine |
 
----
-
-## 📦 Prerequisites
-
-- **Docker** (with your user in the `docker` group)
-- **Visual Studio Code**
-- **Dev Containers extension**
-
----
-
-## 🔧 Setup Instructions
-
-### 1. Clone the Repository
+## start_vnc.sh by hand
 
 ```bash
-git clone --branch macos --single-branch https://github.com/Cobot-Maker-Space/UON-RobotLab-Student-container.git
+./start_vnc.sh start     # create the network + start noVNC
+./start_vnc.sh status    # is it running?
+./start_vnc.sh restart   # stop, then start
+./start_vnc.sh stop      # remove the container
 ```
 
----
-
-### 2. Start the noVNC Service
-
-Before opening the devcontainer, make sure the shared Docker network and noVNC service are running.  
-
-Run:
-
-```bash
-cd ~/UON-CS-robotlab-simulation-container/src/.devcontainer/
-./start_vnc.sh start
-```
-
-This will:
-- Create a `ros` Docker network if it doesn't exist
-- Launch a `theasp/novnc:latest` container mapped to `http://localhost:8080`
-
-Once running, open:
-
-➡ **http://localhost:8080/vnc.html** and click **Connect** to access the container’s desktop GUI.
-
----
-
-### 3. Open in VS Code
-
-Launch VS Code → open the `src/` directory → press `Ctrl+Shift+P` → select:
-
-```
-Dev Containers: Reopen in Container
-```
-
-VS Code will now build and launch the ROS 2 development container, automatically attaching it to the `ros` network so it can reach the noVNC container.
-
----
-
-### 4. Test the Setup
-
-Inside the VS Code terminal:
-
-```bash
-source /opt/ros/humble/setup.bash
-ros2 topic list
-```
-
-If ROS 2 is installed correctly, you’ll see a list of topics (or an empty list if nothing is publishing).
-
----
-
-
-<!-- ### 5. Switching from First-Time Setup to Development Mode
-
-By default, the first container build will clone and build the required TurtleBot3 packages.  
-After this initial build, edit `.devcontainer/devcontainer.json` and switch:
-
-```jsonc
-// Comment this line:
-"postCreateCommand": "rm -rf build/* install/* log/* src/* && cd src/ && git clone -b humble https://github.com/ROBOTIS-GIT/DynamixelSDK.git && git clone -b humble https://github.com/ROBOTIS-GIT/turtlebot3.git && git clone -b humble https://github.com/ROBOTIS-GIT/turtlebot3_msgs.git && git clone -b humble https://github.com/ROBOTIS-GIT/turtlebot3_simulations.git && cd .. && colcon build --symlink-install"
-
-// Uncomment this line:
-"postCreateCommand": "colcon build --symlink-install"
-```
-
-This will prevent re-cloning packages every time and speed up container startup.  
-
-You can now create custom packages under `/home/ros2_ws/src/` and they will persist between container sessions.
- -->
----
-
-## 🛠 Troubleshooting & Common Issues
-
-| Issue | Solution |
-|------|----------|
-| **Permission denied: docker** | Docker Desktop on macOS handles permissions itself — no `docker` group needed. If you still see this, make sure Docker Desktop is running. |
-| **Gazebo spawn service failed** | Don’t Ctrl+C — let it fail completely, then close and restart. |
-| **Gazebo is slow or a plugin fails to load** | Expected on Apple Silicon: Gazebo Classic has no GPU acceleration inside an arm64 container, so it falls back to software rendering. Simulations still run, just slower than on amd64. |
-| **Cannot connect to noVNC** | Run `./start_vnc.sh status` to check if the container is running. |
-
----
-
-## 💡 Notes
-
-- Default user inside container: `team`
-- Workspace is mounted to `/home/ros2_ws/src`
-- Network: `ros` (shared between devcontainer and noVNC container)
-- GUI apps (RViz2, Gazebo) accessible via **browser** at `http://localhost:8080/vnc.html`
-- Includes:
-  - Navigation2, SLAM Toolbox, Teleop
-  - Gazebo + plugins
-  - Cartographer, RViz2
-- VS Code extensions preinstalled for:
-  - ROS
-  - C++
-  - Python
-  - Git integration
-
----
+Override the defaults with environment variables, e.g. `HOST_PORT=8081 ./start_vnc.sh restart`
+if something else already owns port 8080.

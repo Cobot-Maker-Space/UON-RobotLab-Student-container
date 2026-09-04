@@ -1,19 +1,22 @@
 name: Build dev container image (macOS / arm64)
 
-# Publishes the base ROS 2 dev container image used by src/.devcontainer/devcontainer.json on
-# this branch. This is the macOS variant: it targets Apple Silicon (arm64) and is built and
+# Publishes the base ROS 2 dev container image that src/.devcontainer/devcontainer.json on this
+# branch pulls. This is the macOS variant: it targets Apple Silicon (arm64) and is built and
 # published separately from the windows/linux branches, which target amd64.
 #
-# This image bakes in ROS 2 Humble, the desktop/Gazebo/noVNC packages, and setup.sh - but NOT a
-# compiled turtlebot3 workspace. The workspace is still cloned and built at container-creation
-# time by postCreateCommand (see setup.sh), with build/install/log persisted via the cache/
-# bind-mounts in devcontainer.json. Publishing this image just means students pull a ready-made
-# ROS+desktop+noVNC environment instead of apt-installing it locally on every fresh clone.
+# This image bakes in ROS 2 Humble and the Gazebo/Nav2/RViz packages - but NOT a compiled
+# turtlebot3 workspace. devcontainer.json bind-mounts the host's src/ and cache/humble/ over
+# /home/ros2_ws/{src,build,install,log}, so anything baked in at those paths would just be
+# shadowed at container start. The workspace is cloned and built at container-creation time by
+# postCreateCommand (see setup.sh), incrementally after the first run. What students skip by
+# pulling this image is the ~10 minute apt-get-everything step on every fresh clone.
+#
+# It deliberately contains no VNC server or desktop environment: the X server lives in the
+# separate theasp/novnc container that start_vnc.sh brings up. See the Dockerfile.
 #
 # FIRST RUN: GHCR creates new packages PRIVATE by default. After the first successful push, go to
 # the package settings on GitHub and set its visibility to Public - otherwise every machine needs
 # 'docker login' before it can pull.
-
 on:
   workflow_dispatch:
     inputs:
@@ -47,8 +50,9 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      # arm64 desktop packages take real disk. This reclaims ~20 GB of preinstalled toolchains we
-      # do not use, so the build does not die partway through with "no space left on device".
+      # ROS 2 Humble plus Gazebo and Nav2 on top of the base image takes real disk. This reclaims
+      # ~20 GB of preinstalled toolchains we do not use, so the build does not die partway
+      # through with a confusing "no space left on device".
       - name: Free up disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
@@ -71,7 +75,7 @@ jobs:
           echo "Publishing ${IMAGE}:${TAG}"
 
       # Guard against publishing an image tag that devcontainer.json does not point at. A student
-      # on this branch would get 'manifest unknown'.
+      # on this branch would get 'manifest unknown' and no way to tell why.
       - name: Verify devcontainer.json pins the tag being built
         run: |
           PINNED=$(grep -oP '^\s*"image"\s*:\s*"\K[^"]+' src/.devcontainer/devcontainer.json)
@@ -84,13 +88,12 @@ jobs:
             exit 1
           fi
 
-      # arm64 needs QEMU emulation to build/run on this (amd64) runner - there is no free
+      # arm64 needs QEMU emulation to build and run on this (amd64) runner - GitHub has no free
       # arm64-hosted runner here. Without this, 'platforms: linux/arm64' below fails outright.
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -104,13 +107,15 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          # Repository root, not src/.devcontainer - kept consistent with the other branches even
-          # though this Dockerfile does not COPY anything from src/ itself. See .dockerignore.
-          context: .
+          # src/.devcontainer, not the repo root: the Dockerfile does 'COPY setup.sh', which is
+          # resolved relative to the build context. Pointing this at '.' looks harmless but fails
+          # the build outright, because there is no setup.sh at the repo root.
+          context: src/.devcontainer
           file: src/.devcontainer/Dockerfile
-          # macOS on Apple Silicon is arm64. This is the one branch that needs it: osrf/ros images
-          # only ship amd64, which is why the Dockerfile's BASE_IMAGE defaults to ros:humble
-          # (multi-arch) instead. Emulated arm64 builds are noticeably slower than native amd64.
+          # macOS on Apple Silicon is arm64. This is the one branch that needs it, and it is why
+          # the Dockerfile's BASE_IMAGE is the multi-arch ros:humble rather than an osrf image.
+          # Emulated arm64 builds are much slower than the native amd64 ones - expect this job to
+          # take a good while longer than the linux and windows branches.
           platforms: linux/arm64
           push: true
           tags: |
@@ -119,8 +124,8 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Proves the image actually has the desktop/simulation stack in it, not just a bare ROS
-      # install. Runs under QEMU emulation since this is an arm64 image on an amd64 runner.
+      # Proves the four things that actually break in front of a class: no simulation stack, no
+      # display tooling, a missing setup.sh, or a workspace the 'team' user cannot write to.
       - name: Smoke test the published image
         run: |
           IMAGE="${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}"
@@ -128,19 +133,24 @@ jobs:
 
           echo "--- core ROS packages resolve? ---"
           docker run --rm --platform linux/arm64 "$IMAGE" bash -lc \
-            'source /opt/ros/humble/setup.bash && ros2 pkg prefix navigation2 && ros2 pkg prefix slam_toolbox'
+            'source /opt/ros/humble/setup.bash && ros2 pkg prefix navigation2 && ros2 pkg prefix slam_toolbox && ros2 pkg prefix rviz2'
 
           echo "--- gazebo baked in, not apt-installed at runtime? ---"
           docker run --rm --platform linux/arm64 "$IMAGE" bash -lc \
             'source /opt/ros/humble/setup.bash && ros2 pkg prefix gazebo_ros' \
-            || echo "::warning::gazebo_ros did not resolve on arm64 - Gazebo Classic's arm64 packaging is known to be flaky. Falls back to the runtime apt-get install in setup.sh."
+            || echo "::warning::gazebo_ros did not resolve on arm64 - Gazebo Classic's arm64 packaging is known to be flaky. setup.sh falls back to installing it at container-creation time."
 
-          echo "--- noVNC tooling present? ---"
-          docker run --rm --platform linux/arm64 "$IMAGE" bash -lc 'command -v websockify && dpkg -l novnc >/dev/null'
+          echo "--- X client tooling present? ---"
+          docker run --rm --platform linux/arm64 "$IMAGE" bash -lc 'command -v xeyes'
 
           echo "--- setup.sh present and executable? ---"
           docker run --rm --platform linux/arm64 "$IMAGE" test -x /usr/local/bin/setup.sh \
             || { echo "::error::setup.sh missing from the image - postCreateCommand would fail for every student."; exit 1; }
+
+          echo "--- workspace writable by the 'team' user? ---"
+          docker run --rm --platform linux/arm64 "$IMAGE" bash -lc \
+            'touch /home/ros2_ws/build/.write-test && rm /home/ros2_ws/build/.write-test' \
+            || { echo "::error::/home/ros2_ws is not writable by 'team' - colcon build would fail on first start."; exit 1; }
 
       - name: Remind about package visibility
         run: |
