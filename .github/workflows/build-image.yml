@@ -1,27 +1,30 @@
 name: Build dev container image (Windows / amd64, via WSL2)
 
-# Publishes the base ROS 2 dev container image used by src/.devcontainer/devcontainer.json on
-# this branch. Students run this container inside WSL2, which is amd64 Linux under the hood, so
-# this targets the same platform as the linux branch - see the linux and macos branches for their
-# own copies of this workflow (same shape, different image name/platform).
+# Publishes the base ROS 2 dev container image that src/.devcontainer/devcontainer.json on this
+# branch pulls. Students run this container inside WSL2, which is amd64 Linux under the hood, so
+# it targets the same platform as the linux branch - see the linux and macos branches for their
+# own copies of this workflow (same shape, different image name and platform).
 #
-# This image bakes in ROS 2 Humble, the desktop/Gazebo/noVNC packages, and setup.sh - but NOT a
-# compiled turtlebot3 workspace. The workspace is still cloned and built at container-creation
-# time by postCreateCommand (see setup.sh), with build/install/log persisted via the cache/
-# bind-mounts in devcontainer.json. Publishing this image just means students pull a ready-made
-# ROS+desktop+noVNC environment instead of apt-installing it locally on every fresh clone.
+# This image bakes in ROS 2 Humble and the Gazebo/Nav2/RViz packages - but NOT a compiled
+# turtlebot3 workspace. devcontainer.json bind-mounts the host's src/ and cache/humble/ over
+# /home/ros2_ws/{src,build,install,log}, so anything baked in at those paths would just be
+# shadowed at container start. The workspace is cloned and built at container-creation time by
+# postCreateCommand (see setup.sh), incrementally after the first run. What students skip by
+# pulling this image is the ~10 minute apt-get-everything step on every fresh clone.
 #
-# Note: this is a DIFFERENT GHCR package from ghcr.io/cobot-maker-space/windows-robot-simulation,
-# which was published by another repo's workflow and bakes a fully-compiled workspace into the
-# image. That contract does not fit this repo's devcontainer.json, which bind-mounts the host
-# src/ and cache/ directories over /home/ros2_ws/{src,build,install,log} - a baked-in workspace
-# there would just get shadowed at container start. robotlab-devcontainer-windows is this repo's
-# own base image and is what devcontainer.json on this branch actually pulls.
+# It deliberately contains no VNC server or desktop environment: the X server lives in the
+# separate theasp/novnc container that start_vnc.sh brings up. See the Dockerfile.
 #
 # FIRST RUN: GHCR creates new packages PRIVATE by default. After the first successful push, go to
 # the package settings on GitHub and set its visibility to Public - otherwise every machine needs
 # 'docker login' before it can pull.
-
+#
+# Note: this is a DIFFERENT GHCR package from ghcr.io/cobot-maker-space/windows-robot-simulation,
+# which was published by another repo and bakes a fully-compiled workspace into the image. That
+# image does work on this branch (it is amd64 and contains everything below), but this repo
+# cannot rebuild or retag it, and its baked-in workspace is shadowed by the mounts described
+# above. robotlab-devcontainer-windows is this repo's own image and is what devcontainer.json
+# on this branch actually pins.
 on:
   workflow_dispatch:
     inputs:
@@ -55,7 +58,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      # The desktop/Gazebo/noVNC stack on top of the ROS base takes real disk. This reclaims
+      # ROS 2 Humble plus Gazebo and Nav2 on top of the base image takes real disk. This reclaims
       # ~20 GB of preinstalled toolchains we do not use, so the build does not die partway
       # through with a confusing "no space left on device".
       - name: Free up disk space
@@ -80,7 +83,7 @@ jobs:
           echo "Publishing ${IMAGE}:${TAG}"
 
       # Guard against publishing an image tag that devcontainer.json does not point at. A student
-      # on this branch would get 'manifest unknown'.
+      # on this branch would get 'manifest unknown' and no way to tell why.
       - name: Verify devcontainer.json pins the tag being built
         run: |
           PINNED=$(grep -oP '^\s*"image"\s*:\s*"\K[^"]+' src/.devcontainer/devcontainer.json)
@@ -106,9 +109,10 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          # Repository root, not src/.devcontainer - kept consistent with the other branches even
-          # though this Dockerfile does not COPY anything from src/ itself. See .dockerignore.
-          context: .
+          # src/.devcontainer, not the repo root: the Dockerfile does 'COPY setup.sh', which is
+          # resolved relative to the build context. Pointing this at '.' looks harmless but fails
+          # the build outright, because there is no setup.sh at the repo root.
+          context: src/.devcontainer
           file: src/.devcontainer/Dockerfile
           # WSL2 runs a real amd64 Linux kernel, so this matches the linux branch. See the macos
           # branch for the arm64 build.
@@ -120,8 +124,8 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Proves the image actually has the desktop/simulation stack in it, not just a bare ROS
-      # install.
+      # Proves the four things that actually break in front of a class: no simulation stack, no
+      # display tooling, a missing setup.sh, or a workspace the 'team' user cannot write to.
       - name: Smoke test the published image
         run: |
           IMAGE="${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}"
@@ -129,18 +133,23 @@ jobs:
 
           echo "--- core ROS packages resolve? ---"
           docker run --rm "$IMAGE" bash -lc \
-            'source /opt/ros/humble/setup.bash && ros2 pkg prefix navigation2 && ros2 pkg prefix slam_toolbox'
+            'source /opt/ros/humble/setup.bash && ros2 pkg prefix navigation2 && ros2 pkg prefix slam_toolbox && ros2 pkg prefix rviz2'
 
           echo "--- gazebo baked in, not apt-installed at runtime? ---"
           docker run --rm "$IMAGE" bash -lc \
             'source /opt/ros/humble/setup.bash && ros2 pkg prefix gazebo_ros'
 
-          echo "--- noVNC tooling present? ---"
-          docker run --rm "$IMAGE" bash -lc 'command -v websockify && dpkg -l novnc >/dev/null'
+          echo "--- X client tooling present? ---"
+          docker run --rm "$IMAGE" bash -lc 'command -v xeyes'
 
           echo "--- setup.sh present and executable? ---"
           docker run --rm "$IMAGE" test -x /usr/local/bin/setup.sh \
             || { echo "::error::setup.sh missing from the image - postCreateCommand would fail for every student."; exit 1; }
+
+          echo "--- workspace writable by the 'team' user? ---"
+          docker run --rm "$IMAGE" bash -lc \
+            'touch /home/ros2_ws/build/.write-test && rm /home/ros2_ws/build/.write-test' \
+            || { echo "::error::/home/ros2_ws is not writable by 'team' - colcon build would fail on first start."; exit 1; }
 
       - name: Remind about package visibility
         run: |
