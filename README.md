@@ -121,9 +121,9 @@ Other things worth knowing:
 - Default user inside container: `team`
 - No webcam passthrough: Docker Desktop runs a Linux VM that cannot reach host USB devices, so
   `--device=/dev/video0` is deliberately absent from `runArgs`
-- The repo ships a pre-populated `cache/humble/` built on **amd64**. `setup.sh` notices the
-  mismatch on first run here, clears it once, and rebuilds for arm64 — after that, rebuilds are
-  incremental
+- `cache/humble/` starts empty in a fresh clone. The first container start builds the workspace
+  for arm64 into it, and rebuilds after that are incremental. If the folder ever holds a cache
+  built on an amd64 machine, `setup.sh` notices the mismatch, clears it once, and rebuilds
 - The image is pulled, not built locally: `ghcr.io/cobot-maker-space/robotlab-devcontainer-macos`.
   It is published by `.github/workflows/build-image.yml` — see [`decision.md`](decision.md)
 - Includes Navigation2, SLAM Toolbox, Teleop, Gazebo + plugins, Cartographer, RViz2

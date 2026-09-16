@@ -1,0 +1,5 @@
+# Build output from colcon. devcontainer.json bind-mounts these three folders into the container,
+# so the folders themselves must exist in every clone (hence the .gitkeep files), but what gets
+# built into them is machine-specific and must never be committed.
+/cache/humble/*/*
+!/cache/humble/*/.gitkeep
