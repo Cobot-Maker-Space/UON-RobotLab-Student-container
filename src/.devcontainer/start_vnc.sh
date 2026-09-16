@@ -6,6 +6,9 @@ set -euo pipefail
 NETWORK_NAME="${NETWORK_NAME:-ros}"
 NOVNC_NAME="${NOVNC_NAME:-novnc}"
 NOVNC_IMAGE="${NOVNC_IMAGE:-theasp/novnc:latest}"
+# theasp/novnc is published for amd64 only. Asking for that platform explicitly makes Docker on an
+# Apple Silicon Mac run it under Rosetta without a platform-mismatch warning or error.
+NOVNC_PLATFORM="${NOVNC_PLATFORM:-linux/amd64}"
 DISPLAY_WIDTH="${DISPLAY_WIDTH:-3000}"
 DISPLAY_HEIGHT="${DISPLAY_HEIGHT:-1800}"
 RUN_XTERM="${RUN_XTERM:-no}"
@@ -81,7 +84,7 @@ start() {
   fi
 
   info "Running new noVNC container '${NOVNC_NAME}' (image: ${NOVNC_IMAGE})..."
-  docker run -d --rm --network "$NETWORK_NAME" \
+  docker run -d --rm --platform "$NOVNC_PLATFORM" --network "$NETWORK_NAME" \
     --env "DISPLAY_WIDTH=${DISPLAY_WIDTH}" \
     --env "DISPLAY_HEIGHT=${DISPLAY_HEIGHT}" \
     --env "RUN_XTERM=${RUN_XTERM}" \
