@@ -12,6 +12,11 @@ on that branch.
 | Linux | [`linux`](../../tree/linux) | `ghcr.io/cobot-maker-space/robotlab-devcontainer-linux` | `linux/amd64` |
 | macOS (Apple Silicon) | [`macos`](../../tree/macos) | `ghcr.io/cobot-maker-space/robotlab-devcontainer-macos` | `linux/arm64` |
 
+> ⚠️ **Windows users: stop here and open the [`windows` branch README](../../tree/windows).**
+> Do **not** run the command below in PowerShell, Command Prompt or GitHub Desktop. On Windows the
+> clone must happen inside an Ubuntu (WSL2) terminal, and that README walks you through every step
+> from installing WSL onwards. Cloning any other way stops the container from starting.
+
 ```bash
 git clone --branch <windows|linux|macos> --single-branch https://github.com/Cobot-Maker-Space/UON-RobotLab-Student-container.git
 ```
