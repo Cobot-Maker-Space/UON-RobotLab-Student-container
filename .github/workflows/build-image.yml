@@ -5,10 +5,11 @@ name: Build dev container image (pick an OS branch first)
 # only renders the inputs it declares. Delete this file and the button disappears for every
 # branch - so the inputs below mirror the real ones on windows/linux/macos.
 #
-# 'main' publishes no image of its own. There is no OS-agnostic dev container here: each of
-# windows, linux and macos carries its own src/.devcontainer/ and its own copy of this workflow,
-# targeting a different GHCR package and a different CPU architecture. When you dispatch, the
-# run uses the workflow file from whatever you pick in "Use workflow from" - so pick a branch.
+# 'main' publishes no image of its own. There is no OS-agnostic dev container here: windows and
+# linux each carry their own src/.devcontainer/ and a copy of this workflow that publishes their
+# own GHCR package (both linux/amd64). macos publishes nothing - Macs run the linux image under
+# Rosetta, and macos's copy of this workflow is a guard like this one. When you dispatch, the run
+# uses the workflow file from whatever you pick in "Use workflow from" - so pick a branch.
 # This job exists to say so clearly rather than fail somewhere confusing.
 
 on:
@@ -31,18 +32,17 @@ jobs:
       - name: Explain that main does not publish an image
         run: |
           echo "::error::This workflow was dispatched from '${GITHUB_REF_NAME}', which publishes no image."
-          echo "::error::Re-run it and set 'Use workflow from' to one of: windows, linux, macos."
+          echo "::error::Re-run it and set 'Use workflow from' to windows or linux (macos uses the linux image)."
           {
             echo "### Nothing was built"
             echo ""
-            echo "\`main\` has no dev container of its own. Each OS branch carries its own image and its own copy of this workflow:"
+            echo "\`main\` has no dev container of its own. These branches publish images:"
             echo ""
             echo "| Branch | Publishes | Platform |"
             echo "|---|---|---|"
             echo "| \`windows\` | \`ghcr.io/cobot-maker-space/robotlab-devcontainer-windows\` | linux/amd64 |"
-            echo "| \`linux\` | \`ghcr.io/cobot-maker-space/robotlab-devcontainer-linux\` | linux/amd64 |"
-            echo "| \`macos\` | \`ghcr.io/cobot-maker-space/robotlab-devcontainer-macos\` | linux/arm64 |"
+            echo "| \`linux\` | \`ghcr.io/cobot-maker-space/robotlab-devcontainer-linux\` | linux/amd64 — also used by \`macos\`, under Rosetta |"
             echo ""
-            echo "Re-run this workflow with **Use workflow from** set to one of those branches."
+            echo "Re-run this workflow with **Use workflow from** set to \`windows\` or \`linux\`."
           } >> "$GITHUB_STEP_SUMMARY"
           exit 1

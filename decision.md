@@ -22,17 +22,18 @@ to run it — read the `decision.md` on the branch you care about:**
 |---|---|---|---|
 | [`windows`](../../tree/windows) | amd64, via WSL2 + Docker Desktop | `robotlab-devcontainer-windows` | [`decision.md` on `windows`](../../blob/windows/decision.md) |
 | [`linux`](../../tree/linux) | amd64, native Docker | `robotlab-devcontainer-linux` | [`decision.md` on `linux`](../../blob/linux/decision.md) |
-| [`macos`](../../tree/macos) | arm64, Apple Silicon | `robotlab-devcontainer-macos` | [`decision.md` on `macos`](../../blob/macos/decision.md) |
+| [`macos`](../../tree/macos) | amd64 under Rosetta (Apple Silicon) or native (Intel) | nothing — uses `robotlab-devcontainer-linux` | [`decision.md` on `macos`](../../blob/macos/decision.md) |
 
-Each of those documents its branch's specific image name, why it targets the CPU architecture it
-does, and a step-by-step "how to run this, specifically, on `<branch>`" section (which button,
-which dropdown selection, what tag to type, what publishing actually does and doesn't do).
+The `windows` and `linux` documents cover their branch's image name, why it targets the CPU
+architecture it does, and a step-by-step "how to run this, specifically, on `<branch>`" section
+(which button, which dropdown selection, what tag to type, what publishing actually does and
+doesn't do). The `macos` document explains why Macs have no image of their own: Gazebo Classic has
+no arm64 packages, so Macs run the linux image under Rosetta.
 
 ## A note on `ghcr.io/cobot-maker-space/windows-robot-simulation`
 
 That package already exists and is public, but it was published by a **different** repository's
 workflow. It is `linux/amd64` only, and it bakes a fully-compiled ROS workspace into
 `/home/ros2_ws` — which this repo's `devcontainer.json` immediately shadows with bind mounts from
-the host. It works as a stopgap on the `windows` and `linux` branches; it cannot work on `macos`,
-which needs arm64. Nothing in this repo can rebuild or retag it, which is why each branch
-publishes its own package instead.
+the host. It would work as a stopgap on the `windows` and `linux` branches. Nothing in this repo
+can rebuild or retag it, which is why `windows` and `linux` publish their own packages instead.

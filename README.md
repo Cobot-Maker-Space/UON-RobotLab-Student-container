@@ -10,7 +10,7 @@ entry point. Pick the branch that matches your machine and follow the README on 
 |---|---|---|---|
 | Windows (via WSL2 + Docker Desktop) | [`windows`](../../tree/windows) | `ghcr.io/cobot-maker-space/robotlab-devcontainer-windows` | `linux/amd64` |
 | Linux | [`linux`](../../tree/linux) | `ghcr.io/cobot-maker-space/robotlab-devcontainer-linux` | `linux/amd64` |
-| macOS (Apple Silicon) | [`macos`](../../tree/macos) | `ghcr.io/cobot-maker-space/robotlab-devcontainer-macos` | `linux/arm64` |
+| macOS (Apple Silicon or Intel) | [`macos`](../../tree/macos) | `ghcr.io/cobot-maker-space/robotlab-devcontainer-linux` (same image as `linux`) | `linux/amd64`, under Rosetta on Apple Silicon |
 
 > ⚠️ **Windows users: stop here and open the [`windows` branch README](../../tree/windows).**
 > Do **not** run the command below in PowerShell, Command Prompt or GitHub Desktop. On Windows the
@@ -37,9 +37,13 @@ Each OS branch is maintained independently.
 
 ## Building and publishing the images
 
-Each OS branch has its own `.github/workflows/build-image.yml`, targeting its own GHCR package
-and CPU architecture. To publish: **Actions → Build dev container image → Run workflow**, and set
-**Use workflow from** to the branch you want.
+`windows` and `linux` each have their own `.github/workflows/build-image.yml`, publishing their own
+GHCR package. To publish: **Actions → Build dev container image → Run workflow**, and set
+**Use workflow from** to `windows` or `linux`.
+
+`macos` publishes nothing: Gazebo Classic has no arm64 packages, so Macs run the `linux` image under
+Rosetta. After publishing a new `linux` tag, update the `image` field in `macos`'s
+`src/.devcontainer/devcontainer.json` to match.
 
 The copy of that workflow on `main` builds nothing — it exists only because GitHub hides the
 **Run workflow** button entirely unless a `workflow_dispatch` workflow with that path exists on
