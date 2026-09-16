@@ -3,8 +3,8 @@
 A Docker-based ROS 2 Humble development container for TurtleBot3 simulation, with GUI access
 via noVNC in the browser — so students don't need a local ROS/Gazebo install to get started.
 
-There is no OS-agnostic setup: pick the branch that matches your machine and follow the README
-on that branch.
+**This `main` branch contains no container.** It is only this landing page and the workflow
+entry point. Pick the branch that matches your machine and follow the README on that branch.
 
 | Your machine | Branch | Image it pulls | Platform |
 |---|---|---|---|
@@ -21,9 +21,19 @@ on that branch.
 git clone --branch <windows|linux|macos> --single-branch https://github.com/Cobot-Maker-Space/UON-RobotLab-Student-container.git
 ```
 
-Then open the **`src/` directory** in VS Code — that is where `.devcontainer` lives — and run
-**Dev Containers: Reopen in Container**. Everything else, including starting noVNC, happens
-automatically. The branch README covers the rest.
+After cloning one of those branches, open its **`src/` directory** in VS Code — that is where
+`.devcontainer` lives — and run **Dev Containers: Reopen in Container**. Everything else, including
+starting noVNC, happens automatically. The branch README covers the rest.
+
+> ℹ️ A plain `git clone` without `--branch` gives you `main`, which has nothing to run. Always pass
+> `--branch`.
+
+## For maintainers
+
+`main` is deliberately kept to `README.md`, `decision.md` and `.github/workflows/build-image.yml`.
+**Never merge `main` into `windows`, `linux` or `macos`** (it would delete their `src/` and
+`cache/`), and **never merge those branches into `main`** (it would bring everything back).
+Each OS branch is maintained independently.
 
 ## Building and publishing the images
 
