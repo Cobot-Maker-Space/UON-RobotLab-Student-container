@@ -38,11 +38,12 @@ fi
 mkdir -p "$SRC_DIR"
 cd "$SRC_DIR"
 
-# The repo ships a pre-populated cache/humble/{build,install,log}, bind-mounted over
-# ${WORKSPACE_DIR}/{build,install,log}. Those artefacts are architecture-specific and full of
-# absolute paths, so reusing an amd64 cache inside an arm64 container produces baffling link
-# errors. Stamp the cache with what produced it, and only wipe when the stamp does not match —
-# that way a normal rebuild is incremental (seconds) instead of a full build (many minutes).
+# The host's cache/humble/{build,install,log} is bind-mounted over ${WORKSPACE_DIR}/{build,install,log}.
+# The repo ships those folders empty (only a .gitkeep each); the first container start fills them.
+# Build artefacts are architecture-specific and full of absolute paths, so reusing an amd64 cache
+# inside an arm64 container produces baffling link errors. Stamp the cache with what produced it,
+# and only wipe when the stamp does not match — that way a normal rebuild is incremental (seconds)
+# instead of a full build (many minutes). The wipe uses '*', which skips the .gitkeep dotfiles.
 STAMP_FILE="${WORKSPACE_DIR}/build/.built-for"
 STAMP="$(uname -m)-${ROS_DISTRO:-humble}"
 

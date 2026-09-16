@@ -241,9 +241,8 @@ No secret to manage: `GITHUB_TOKEN` is generated automatically per run and expir
 root. This matters more than it looks: the Dockerfile does `COPY setup.sh /usr/local/bin/setup.sh`,
 and `COPY` paths are resolved **relative to the build context**, not to the Dockerfile. With the
 context at the repository root there is no `setup.sh` to find, and the build fails on that line
-every time. Pointing it here also means the upload is four small files rather than the whole repo
-including the 212 MB `cache/` directory - which is why there is no longer a `.dockerignore`; there
-is nothing left for it to exclude.
+every time. Pointing it here also means the upload is four small files rather than the whole
+repo, which is why there is no longer a `.dockerignore`; there is nothing left for it to exclude.
 
 **`platforms: linux/amd64`** - Students run this container inside WSL2, which is a real amd64 Linux kernel under Docker Desktop's hood - the same architecture as the linux branch. Building for the wrong architecture here doesn't fail
 loudly; it produces an image that pulls fine and then fails to *run* on the target machine, which
@@ -390,9 +389,11 @@ Because this repo's `devcontainer.json` bind-mounts the host `src/` and `cache/h
 over `/home/ros2_ws/{src,build,install,log}`. A workspace baked into the image at that path would
 be immediately shadowed by those mounts the moment the container starts - you'd pay the CI time
 and image-size cost and get nothing for it. The workspace build stays where it already worked:
-`postCreateCommand` → `setup.sh`, at container creation, with `cache/humble/` in the repo keeping
-it fast after the first run. `setup.sh` stamps that cache with the architecture it was built for
-and only clears it on a mismatch, so an amd64 cache can't quietly corrupt an arm64 build.
+`postCreateCommand` → `setup.sh`, at container creation, with `cache/humble/` on the student's
+machine keeping it fast after the first run. The repo ships those folders empty (a `.gitkeep` each,
+everything else `.gitignore`d) - build output is machine-specific and must never be committed.
+`setup.sh` stamps that cache with the architecture it was built for and only clears it on a
+mismatch, so an amd64 cache can't quietly corrupt an arm64 build.
 
 **"Why does publishing need a manual click, or a deliberately pushed tag?"**
 Because the artefact is pulled by everyone using this branch. Automatic publishing on every commit

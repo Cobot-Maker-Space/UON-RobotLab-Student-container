@@ -1,0 +1,9 @@
+# Scripts that run inside Linux (WSL2 or the container) must keep LF line endings, whatever Git's
+# core.autocrlf is set to on the machine that cloned the repo. A CRLF start_vnc.sh fails with
+# "bad interpreter: /bin/bash^M" before the dev container can even be created.
+#
+# Deliberately narrow: several TurtleBot3 source files (launch .py, .sdf, .urdf, ...) are already
+# committed with CRLF. A broader rule such as '*.py' would show them as modified in every fresh clone.
+*.sh       text eol=lf
+*.bash     text eol=lf
+Dockerfile text eol=lf
