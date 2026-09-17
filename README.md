@@ -249,7 +249,9 @@ ros2 launch turtlebot3_gazebo empty_world.launch.py
 ```
 
 Gazebo with a TurtleBot3 should appear in the browser tab. On Apple Silicon the first launch can
-take a couple of minutes. Stop it with `Ctrl` + `C`.
+take a couple of minutes, so let it run smoothly without any interrrupts. You would see `Spawn Service failed` 
+on first try and then Gazebo would load but without a Robot. Now Press `Ctrl + C` in the terminal and then rerun the command.
+It should all be working fine now.
 
 🎉 **Setup is complete.**
 
