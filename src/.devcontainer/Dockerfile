@@ -58,6 +58,7 @@ RUN dos2unix /usr/local/bin/setup.sh \
 RUN printf '%s\n' \
     'source /opt/ros/humble/setup.bash' \
     '[ -f /home/ros2_ws/install/setup.bash ] && source /home/ros2_ws/install/setup.bash' \
+    'source /usr/share/gazebo/setup.sh' \
     >> /home/$USERNAME/.bashrc
 
 # Add user to video group (for rendering access), and create the workspace directories up front
