@@ -40,9 +40,12 @@
     "TURTLEBOT3_MODEL": "waffle",
     // RViz uses MIT-SHM by default, which does not work across a network X connection.
     "QT_X11_NO_MITSHM": "1",
+    "MAKEFLAGS": "-j2",
+    "COLCON_DEFAULTS_FILE": "/home/ros2_ws/src/.devcontainer/colcon_defaults.yaml",
     // Docker Desktop on a Mac has no GPU passthrough, so Gazebo and RViz must render on the
     // CPU. Without this they either crash on startup or fall back unpredictably.
     "LIBGL_ALWAYS_SOFTWARE": "1"
+    
 },
     "runArgs": [
     // "--net=host",
