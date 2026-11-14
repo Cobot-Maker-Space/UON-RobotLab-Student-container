@@ -1,0 +1,3 @@
+# Build at most 2 packages at once (colcon defaults to one per CPU).
+build:
+  parallel-workers: 2
